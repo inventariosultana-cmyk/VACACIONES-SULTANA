@@ -76,6 +76,7 @@
   .btn-success{background:var(--success);color:#fff;}
   .btn-small{padding:7px 12px;font-size:13px;}
   .error-box{background:var(--danger-soft);color:var(--danger);padding:10px 12px;border-radius:7px;font-size:13.5px;margin-top:16px;}
+  .success-box{background:var(--success-soft);color:var(--success);padding:12px 14px;border-radius:7px;font-size:13.5px;margin-bottom:16px;line-height:1.5;}
   .hint{color:var(--ink-soft);font-size:12.5px;margin-top:10px;line-height:1.5;}
 
   /* ---------- App shell ---------- */
@@ -147,6 +148,26 @@
   .month-bar-fill{background:var(--accent);height:100%;border-radius:6px;}
   .month-bar-value{width:36px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12.5px;}
   .config-note{background:var(--warm-soft);color:#7a4a1f;padding:14px 16px;border-radius:8px;font-size:13.5px;margin:20px auto;max-width:500px;line-height:1.6;}
+
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;}
+  .cal-cell{
+    aspect-ratio:1;border:1px solid var(--line);border-radius:7px;padding:4px 5px;
+    position:relative;background:#fff;
+  }
+  .cal-head{border:none;background:none;aspect-ratio:auto;text-align:center;
+    font-weight:700;font-size:11px;color:var(--ink-soft);padding:2px 0;text-transform:uppercase;}
+  .cal-empty{border:none;background:none;}
+  .cal-hasvac{background:var(--accent-soft);border-color:var(--accent);}
+  .cal-daynum{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--ink-soft);}
+  .cal-hasvac .cal-daynum{color:var(--accent-dark);font-weight:600;}
+  .cal-badge{
+    position:absolute;bottom:4px;right:4px;background:var(--accent);color:#fff;
+    border-radius:50%;width:16px;height:16px;display:flex;align-items:center;justify-content:center;
+    font-size:9.5px;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  }
+  .cal-legend{margin-top:14px;font-size:13px;}
+  .cal-legend-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);}
+  .cal-legend-item:last-child{border-bottom:none;}
 </style>
 </head>
 <body>
@@ -160,7 +181,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
-  collection, onSnapshot, addDoc, query, serverTimestamp
+  collection, onSnapshot, addDoc, query, where, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* =========================================================
@@ -220,6 +241,17 @@ function isoWeek(dateStr){
   return 1 + Math.round(((d-week1)/86400000 - 3 + ((week1.getDay()+6)%7))/7);
 }
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DIAS_SEMANA = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+function todayStr(){
+  const d = new Date(); d.setHours(0,0,0,0);
+  return d.toISOString().slice(0,10);
+}
+function addDaysStr(dateStr, n){
+  const d = new Date(dateStr+"T00:00:00");
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+const DIAS_ANTICIPACION = 7;
 
 /* ================= Estado ================= */
 let state = {
@@ -421,7 +453,14 @@ function attachListeners(){
     state.employees = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   });
-  state.unsubRequests = onSnapshot(collection(db,"requests"), (snap)=>{
+  // Un admin puede escuchar TODAS las solicitudes. Un empleado solo puede
+  // escuchar las suyas: las reglas de seguridad exigen que la consulta
+  // venga filtrada por su propia nómina, o Firestore la rechaza entera
+  // (así estaba el bug: al empleado nunca le llegaba ni su propia solicitud).
+  const requestsQuery = state.user.isAdmin
+    ? collection(db,"requests")
+    : query(collection(db,"requests"), where("nomina","==",state.user.nomina));
+  state.unsubRequests = onSnapshot(requestsQuery, (snap)=>{
     state.requests = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   });
@@ -496,17 +535,24 @@ function renderEmpleadoShell(){
 
       <div class="card">
         <h3>Solicitar vacaciones</h3>
+        ${state.reqFeedback ? `<div class="success-box">${state.reqFeedback}</div>` : ""}
         <form id="reqForm">
           <div class="field-row">
             <div>
               <label>Fecha de inicio</label>
-              <input type="date" id="fi" required />
+              <input type="date" id="fi" min="${addDaysStr(todayStr(),DIAS_ANTICIPACION)}" required />
             </div>
             <div>
               <label>Fecha de fin</label>
-              <input type="date" id="ff" required />
+              <input type="date" id="ff" min="${addDaysStr(todayStr(),DIAS_ANTICIPACION)}" required />
             </div>
           </div>
+          <p class="hint">
+            Un solo día = misma fecha en inicio y fin (ej. 02 al 02 de enero).
+            Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a viernes).
+            Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación.
+          </p>
+          <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
           <label>Comentario (opcional)</label>
           <textarea id="comentario" rows="2" placeholder="Ej. viaje familiar, trámite personal…"></textarea>
           <div id="reqError"></div>
@@ -535,6 +581,23 @@ function renderEmpleadoShell(){
     </div>`;
   bindTopbar();
   document.getElementById("reqForm").addEventListener("submit", handleNuevaSolicitud);
+  const fiInput = document.getElementById("fi");
+  const ffInput = document.getElementById("ff");
+  function actualizarPreview(){
+    // el fin no puede ser antes que el inicio
+    if(fiInput.value) ffInput.min = fiInput.value;
+    const preview = document.getElementById("diasPreview");
+    if(fiInput.value && ffInput.value){
+      const dias = diasHabilesEntre(fiInput.value, ffInput.value);
+      preview.textContent = dias>0
+        ? `Esta solicitud equivale a ${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}.`
+        : `Revisa las fechas: no hay ningún día hábil en ese rango.`;
+    } else {
+      preview.textContent = "";
+    }
+  }
+  fiInput.addEventListener("change", actualizarPreview);
+  ffInput.addEventListener("change", actualizarPreview);
 }
 
 async function handleNuevaSolicitud(e){
@@ -543,9 +606,16 @@ async function handleNuevaSolicitud(e){
   const ff = document.getElementById("ff").value;
   const comentario = document.getElementById("comentario").value.trim();
   const errBox = document.getElementById("reqError");
+  errBox.innerHTML = "";
+
+  const minInicio = addDaysStr(todayStr(), DIAS_ANTICIPACION);
+  if(fi < minInicio){
+    errBox.innerHTML = `<div class="error-box">Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación. La fecha de inicio más próxima que puedes elegir es ${minInicio}.</div>`;
+    return;
+  }
   const dias = diasHabilesEntre(fi,ff);
   if(dias<=0){
-    errBox.innerHTML = `<div class="error-box">Revisa las fechas: la fecha de fin debe ser igual o posterior, y el rango debe incluir al menos un día hábil.</div>`;
+    errBox.innerHTML = `<div class="error-box">Revisa las fechas: la fecha de fin debe ser igual o posterior a la de inicio, y el rango debe incluir al menos un día hábil.</div>`;
     return;
   }
   const b = balanceDe(state.user.nomina);
@@ -560,6 +630,8 @@ async function handleNuevaSolicitud(e){
     estado: "pendiente", comentarioEmpleado: comentario, comentarioAdmin:"",
     fechaSolicitud: serverTimestamp()
   });
+  state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
+  render();
 }
 
 /* ================= Vista Admin ================= */
@@ -765,10 +837,52 @@ async function resolverSolicitud(id, estado){
   await updateDoc(doc(db,"requests",id), {estado, comentarioAdmin});
 }
 
+function construirCalendarioMes(year, month){
+  const pad = n=>String(n).padStart(2,"0");
+  const primerDia = new Date(year,month,1).getDay();
+  const diasEnMes = new Date(year,month+1,0).getDate();
+  const aprobadas = state.requests.filter(r=>r.estado==="aprobado");
+
+  let celdas = "";
+  for(let i=0;i<primerDia;i++) celdas += `<div class="cal-cell cal-empty"></div>`;
+  for(let d=1; d<=diasEnMes; d++){
+    const dateStr = `${year}-${pad(month+1)}-${pad(d)}`;
+    const matches = aprobadas.filter(r=>r.fechaInicio<=dateStr && r.fechaFin>=dateStr);
+    const nombres = matches.map(r=>r.nombreEmpleado).join(", ");
+    celdas += `
+      <div class="cal-cell ${matches.length>0?'cal-hasvac':''}" ${matches.length>0?`title="${nombres.replace(/"/g,'')}"`:""}>
+        <div class="cal-daynum">${d}</div>
+        ${matches.length>0? `<div class="cal-badge">${matches.length}</div>`:""}
+      </div>`;
+  }
+
+  // lista de quién está de vacaciones, para la leyenda (más legible en celular)
+  const enEsteMes = aprobadas.filter(r=>{
+    const finMes = `${year}-${pad(month+1)}-${pad(diasEnMes)}`;
+    const inicioMes = `${year}-${pad(month+1)}-01`;
+    return r.fechaInicio<=finMes && r.fechaFin>=inicioMes;
+  }).sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
+
+  return `
+    <div class="cal-grid">
+      ${DIAS_SEMANA.map(d=>`<div class="cal-cell cal-head">${d}</div>`).join("")}
+      ${celdas}
+    </div>
+    <div class="cal-legend">
+      ${enEsteMes.length===0? `<div class="empty">Nadie tiene vacaciones aprobadas este mes.</div>` : enEsteMes.map(r=>`
+        <div class="cal-legend-item">
+          <span>${r.nombreEmpleado}</span>
+          <span class="num">${r.fechaInicio} → ${r.fechaFin}</span>
+        </div>`).join("")}
+    </div>`;
+}
+
 function renderTabReportes(container){
   const anioActual = new Date().getFullYear();
   if(!state.reportYear) state.reportYear = anioActual;
+  if(state.reportMonth===undefined || state.reportMonth===null) state.reportMonth = new Date().getMonth();
   const anio = state.reportYear;
+  const mes = state.reportMonth;
 
   const aprobadas = state.requests.filter(r=>r.estado==="aprobado" && r.fechaInicio && r.fechaInicio.startsWith(String(anio)));
 
@@ -793,6 +907,22 @@ function renderTabReportes(container){
   anios.sort();
 
   container.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <h3 style="margin:0;">Calendario de vacaciones</h3>
+        <div style="display:flex;gap:8px;">
+          <select id="monthSelect" style="width:auto;">
+            ${MESES.map((m,i)=>`<option value="${i}" ${i===mes?"selected":""}>${m}</option>`).join("")}
+          </select>
+          <select id="yearSelectCal" style="width:auto;">
+            ${anios.map(a=>`<option value="${a}" ${Number(a)===anio?"selected":""}>${a}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      ${construirCalendarioMes(anio, mes)}
+      <p class="hint">El número en cada día es la cantidad de empleados de vacaciones. Pasa el cursor sobre un día marcado para ver quién (en celular, mantén presionado).</p>
+    </div>
+
     <div class="card">
       <div class="toolbar">
         <h3 style="margin:0;">Días de vacaciones aprobados por mes</h3>
@@ -836,6 +966,14 @@ function renderTabReportes(container){
     </div>`;
 
   document.getElementById("yearSelect").addEventListener("change",(e)=>{
+    state.reportYear = Number(e.target.value);
+    renderTabReportes(container);
+  });
+  document.getElementById("monthSelect").addEventListener("change",(e)=>{
+    state.reportMonth = Number(e.target.value);
+    renderTabReportes(container);
+  });
+  document.getElementById("yearSelectCal").addEventListener("change",(e)=>{
     state.reportYear = Number(e.target.value);
     renderTabReportes(container);
   });
