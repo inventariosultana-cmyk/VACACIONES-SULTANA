@@ -5,23 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Control de Vacaciones</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg: #F5F6F3;
+    --bg: #F0F3F5;
     --surface: #FFFFFF;
-    --ink: #1F2D2B;
-    --ink-soft: #5B6864;
-    --accent: #2F6F5E;
-    --accent-dark: #234f43;
-    --accent-soft: #E4EEEA;
+    --ink: #10222C;
+    --ink-soft: #5A6E78;
+    --accent: #0F3E58;
+    --accent-dark: #0A2C3F;
+    --accent-soft: #E2EBEF;
     --warm: #C9793A;
     --warm-soft: #F6E7D8;
-    --success: #3D8B5F;
+    --success: #2F8F63;
     --success-soft: #E1F0E6;
     --danger: #B4453B;
     --danger-soft: #F6E1DF;
-    --line: #DDE3DF;
+    --line: #DCE3E7;
     --radius: 10px;
   }
   *{box-sizing:border-box;}
@@ -34,18 +34,21 @@
     -webkit-font-smoothing:antialiased;
   }
   h1,h2,h3,.brand{
-    font-family:'Fraunces',serif;
-    font-weight:600;
+    font-family:'Poppins',sans-serif;
+    font-weight:700;
     letter-spacing:-0.01em;
   }
   .mono{font-family:'IBM Plex Mono',monospace;}
   #root{min-height:100vh;display:flex;flex-direction:column;}
+  .brand-lockup{display:flex;align-items:center;gap:10px;}
+  .brand-icon{width:26px;height:26px;flex-shrink:0;}
+  .brand-wordmark{font-family:'Poppins',sans-serif;font-weight:700;font-size:20px;letter-spacing:-0.01em;}
+  .brand-tagline{font-family:'Inter',sans-serif;font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);}
 
   /* ---------- Login ---------- */
   .login-wrap{
     flex:1;display:flex;align-items:center;justify-content:center;padding:24px;
-    background:
-      linear-gradient(180deg, rgba(47,111,94,0.06), rgba(47,111,94,0) 40%);
+    background: linear-gradient(160deg, var(--accent-dark) 0%, var(--accent) 55%, var(--accent-dark) 100%);
   }
   .login-card{
     background:var(--surface);
@@ -53,9 +56,9 @@
     border-radius:var(--radius);
     padding:40px 36px;
     width:100%;max-width:400px;
-    box-shadow:0 1px 2px rgba(31,45,43,0.04);
+    box-shadow:0 20px 50px rgba(10,44,63,0.35);
   }
-  .login-brand{font-size:26px;color:var(--accent-dark);margin:0 0 4px;}
+  .login-brand{font-size:24px;color:var(--accent-dark);margin:14px 0 2px;}
   .login-sub{color:var(--ink-soft);font-size:13.5px;margin:0 0 28px;}
   label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:16px 0 6px;text-transform:uppercase;letter-spacing:.04em;}
   input, select, textarea{
@@ -82,16 +85,19 @@
   /* ---------- App shell ---------- */
   .topbar{
     display:flex;align-items:center;justify-content:space-between;
-    padding:16px 28px;background:var(--surface);border-bottom:1px solid var(--line);
+    padding:14px 28px;background:var(--accent-dark);border-bottom:1px solid var(--accent-dark);
   }
-  .topbar-left{display:flex;align-items:center;gap:10px;}
-  .topbar-brand{font-size:19px;color:var(--accent-dark);}
+  .topbar-left{display:flex;align-items:center;gap:12px;}
+  .topbar .brand-icon{color:#fff;}
+  .topbar .brand-wordmark{color:#fff;}
+  .topbar .brand-tagline{color:#B9C8D1;}
   .badge-role{
     font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 8px;border-radius:20px;
-    background:var(--accent-soft);color:var(--accent-dark);
+    background:rgba(255,255,255,0.14);color:#fff;
   }
   .topbar-right{display:flex;align-items:center;gap:14px;}
-  .user-name{font-size:13.5px;color:var(--ink-soft);}
+  .user-name{font-size:13.5px;color:#CBD8DE;}
+  .topbar .btn-ghost{border-color:rgba(255,255,255,0.3);color:#fff;}
   .content{flex:1;padding:28px;max-width:1100px;margin:0 auto;width:100%;}
   .tabs{display:flex;gap:6px;margin-bottom:24px;flex-wrap:wrap;}
   .tab{
@@ -256,6 +262,7 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
+const CATEGORIAS = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza"];
 function fechaAniversario(fechaIngresoStr, n){
   const d = new Date(fechaIngresoStr+"T00:00:00");
   d.setFullYear(d.getFullYear()+n);
@@ -294,6 +301,23 @@ let state = {
 
 const root = document.getElementById("root");
 
+const ICONO_MARCA = `<svg class="brand-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M10 38 V13 H35" stroke="currentColor" stroke-width="15" stroke-linecap="square"/>
+  <path d="M65 13 H90 V38" stroke="currentColor" stroke-width="15" stroke-linecap="square"/>
+  <path d="M90 62 V87 H65" stroke="currentColor" stroke-width="15" stroke-linecap="square"/>
+  <path d="M35 87 H10 V62" stroke="currentColor" stroke-width="15" stroke-linecap="square"/>
+</svg>`;
+function marcaLockup(tagline){
+  return `
+    <div class="brand-lockup">
+      ${ICONO_MARCA}
+      <div>
+        <div class="brand-wordmark">sultana</div>
+        ${tagline? `<div class="brand-tagline">${tagline}</div>` : ""}
+      </div>
+    </div>`;
+}
+
 /* ================= Render raíz ================= */
 function render(){
   if (CONFIG_PENDING){ renderConfigPending(); return; }
@@ -305,8 +329,8 @@ function renderConfigPending(){
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card" style="max-width:520px;">
-        <h1 class="login-brand">Control de Vacaciones</h1>
-        <p class="login-sub">Falta conectar la base de datos.</p>
+        ${marcaLockup("Control de Vacaciones")}
+        <p class="login-sub" style="margin-top:16px;">Falta conectar la base de datos.</p>
         <div class="config-note">
           Este archivo necesita tu configuración de Firebase antes de funcionar.
           Abre <span class="mono">index.html</span>, busca el objeto
@@ -324,8 +348,8 @@ function renderLogin(){
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h1 class="login-brand">Control de Vacaciones</h1>
-        <p class="login-sub">Ingresa con tu número de nómina. Si es tu primera vez, elige aquí la contraseña que quieras usar.</p>
+        ${marcaLockup("Control de Vacaciones")}
+        <p class="login-sub" style="margin-top:16px;">Ingresa con tu número de nómina. Si es tu primera vez, elige aquí la contraseña que quieras usar.</p>
         <form id="loginForm">
           <label>Número de nómina</label>
           <input class="mono-input" id="nomina" required placeholder="Ej. 0042" />
@@ -394,8 +418,8 @@ function renderSetupAdmin(e){
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h1 class="login-brand">Configurar administrador</h1>
-        <p class="login-sub">Usa esto solo la primera vez, para crear la cuenta principal de RH/administración.</p>
+        ${marcaLockup("Configurar administrador")}
+        <p class="login-sub" style="margin-top:16px;">Usa esto solo la primera vez, para crear la cuenta principal de RH/administración.</p>
         <form id="setupForm">
           <label>Número de nómina (del admin)</label>
           <input class="mono-input" id="s_nomina" required placeholder="Ej. 0001" />
@@ -534,7 +558,7 @@ function topbarHtml(){
   return `
     <div class="topbar">
       <div class="topbar-left">
-        <span class="brand topbar-brand">Vacaciones</span>
+        ${marcaLockup("Control de Vacaciones")}
         <span class="badge-role">${state.user.isAdmin? "ADMIN" : "EMPLEADO"}</span>
       </div>
       <div class="topbar-right">
@@ -787,11 +811,11 @@ function renderEmpForm(emp){
             <input type="number" min="0" id="f_manual" value="${emp?.diasManual ?? ""}" placeholder="Dejar vacío = calculado" />
           </div>
         </div>
-        <label>Categoría / departamento (opcional)</label>
-        <input id="f_categoria" list="listaCategorias" value="${emp?.categoria||""}" placeholder="Ej. Ventas, Producción, Administración…" />
-        <datalist id="listaCategorias">
-          ${[...new Set(state.employees.map(e=>e.categoria).filter(Boolean))].map(c=>`<option value="${c}"></option>`).join("")}
-        </datalist>
+        <label>Categoría</label>
+        <select id="f_categoria" required>
+          <option value="" ${emp?.categoria? "" : "selected"} disabled>Selecciona una categoría…</option>
+          ${CATEGORIAS.map(c=>`<option value="${c}" ${emp?.categoria===c?"selected":""}>${c}</option>`).join("")}
+        </select>
         <p class="hint">Se usa para colorear el calendario y avisar si dos personas de la misma categoría piden las mismas fechas.</p>
 
         <label>Días restantes en su periodo actual (opcional)</label>
@@ -834,7 +858,7 @@ function renderEmpForm(emp){
     const fecha = document.getElementById("f_fecha").value;
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
-    const categoria = document.getElementById("f_categoria").value.trim();
+    const categoria = document.getElementById("f_categoria").value;
     const restantesRaw = document.getElementById("f_restantes").value;
     let diasRestantesIniciales = null, diasRestantesInicialesPeriodoInicio = null;
     if(restantesRaw !== ""){
@@ -1189,16 +1213,33 @@ function renderTabReportes(container){
     </div>
 
     <div class="card">
-      <h3>Resumen por empleado (${anio})</h3>
+      <h3>Resumen por empleado</h3>
       <table>
-        <thead><tr><th>Nómina</th><th>Nombre</th><th>Días tomados en ${anio}</th></tr></thead>
+        <thead><tr><th>Nómina</th><th>Nombre</th><th>Categoría</th><th>Antigüedad</th><th>Días totales</th><th>Días tomados</th><th>Restantes</th></tr></thead>
         <tbody>
         ${state.employees.map(emp=>{
-          const total = aprobadas.filter(r=>r.nomina===emp.nomina).reduce((s,r)=>s+r.diasHabiles,0);
-          return `<tr><td class="num">${emp.nomina}</td><td>${emp.nombre}</td><td class="num">${total}</td></tr>`;
+          const b = balanceDe(emp.nomina);
+          if(b.esAdmin){
+            return `<tr><td class="num">${emp.nomina}</td><td>${emp.nombre}</td><td>${emp.categoria||"—"}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>`;
+          }
+          // "Días totales" siempre es el que corresponde por antigüedad (o el manual, si RH puso uno fijo),
+          // sin inflar por el ajuste de días restantes. "Días tomados" se obtiene de ese total menos lo
+          // que le queda (restantes), y "restantes" ya considera el ajuste inicial si se agregó.
+          const totalPorAntiguedad = (emp.diasManual!==null && emp.diasManual!==undefined) ? emp.diasManual : diasPorAntiguedad(b.antig);
+          const tomadosCalc = Math.max(0, totalPorAntiguedad - b.restantes);
+          return `<tr>
+            <td class="num">${emp.nomina}</td>
+            <td>${emp.nombre}</td>
+            <td>${emp.categoria||"—"}</td>
+            <td class="num">${b.antig}a</td>
+            <td class="num">${totalPorAntiguedad}</td>
+            <td class="num">${tomadosCalc}${b.ajustado?" ⚙":""}</td>
+            <td class="num">${b.restantes}</td>
+          </tr>`;
         }).join("")}
         </tbody>
       </table>
+      <p class="hint">"Días totales" es el que corresponde por antigüedad (o el fijo que RH haya puesto). "Días tomados" y "Restantes" son del periodo vigente de cada empleado (de su último aniversario de ingreso al siguiente) — si se anotó cuántos días le quedaban al darlo de alta, "Días tomados" ya lo toma en cuenta (ese campo es opcional). ⚙ = tiene ese ajuste activo para el periodo actual.</p>
     </div>`;
 
   document.getElementById("yearSelect").addEventListener("change",(e)=>{
