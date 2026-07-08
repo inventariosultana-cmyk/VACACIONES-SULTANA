@@ -8,17 +8,42 @@ service cloud.firestore {
     function miNomina() {
       return request.auth.token.email.split('@')[0];
     }
+    function existeEmpleado(nomina) {
+      return exists(/databases/$(database)/documents/employees/$(nomina));
+    }
     function esAdmin() {
       return estaConectado() &&
+        existeEmpleado(miNomina()) &&
         get(/databases/$(database)/documents/employees/$(miNomina())).data.isAdmin == true;
     }
+    function yaHayConfiguracionInicial() {
+      return exists(/databases/$(database)/documents/meta/setup);
+    }
 
-    // Datos de empleados: cualquiera que esté logueado puede leer
-    // (lo necesitan para ver antigüedad/días de sus compañeros en reportes),
-    // pero solo el administrador puede crear, editar o borrar.
+    // Datos de empleados.
+    // - "get" (leer UN empleado por su nómina) es público: lo necesita la
+    //   pantalla de login para validar el número de nómina ANTES de que
+    //   la persona tenga sesión iniciada.
+    // - "list" (ver la lista completa de empleados) sí requiere sesión.
+    // - Crear/editar/borrar normalmente solo lo puede hacer el admin,
+    //   EXCEPTO la primera vez: se permite crear la cuenta admin inicial
+    //   mientras no exista todavía el documento meta/setup.
     match /employees/{nomina} {
-      allow read: if estaConectado();
-      allow write: if esAdmin();
+      allow get: if true;
+      allow list: if estaConectado();
+      allow create: if esAdmin() ||
+        (!yaHayConfiguracionInicial() &&
+         estaConectado() &&
+         request.resource.data.nomina == miNomina() &&
+         request.resource.data.isAdmin == true);
+      allow update, delete: if esAdmin();
+    }
+
+    // Documento "candado" que marca que ya se creó el primer administrador.
+    match /meta/setup {
+      allow get: if true;
+      allow create: if estaConectado() && !yaHayConfiguracionInicial();
+      allow update, delete: if esAdmin();
     }
 
     // Solicitudes de vacaciones: un empleado solo puede crear solicitudes

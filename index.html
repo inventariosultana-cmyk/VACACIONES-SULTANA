@@ -371,10 +371,21 @@ async function handleSetupAdmin(e){
       return;
     }
     const email = nomina+"@vacaciones.local";
-    await createUserWithEmailAndPassword(auth, email, password);
+    try{
+      await createUserWithEmailAndPassword(auth, email, password);
+    }catch(errAuth){
+      if(errAuth.code === "auth/email-already-in-use"){
+        // Quedó una cuenta de acceso de un intento anterior sin completar:
+        // iniciamos sesión con ella en vez de crearla de nuevo.
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        throw errAuth;
+      }
+    }
     await setDoc(empRef, {
       nomina, nombre, fechaIngreso: fecha, isAdmin:true, diasManual:null, activo:true
     });
+    await setDoc(doc(db,"meta","setup"), {creado:true, nomina, fecha: new Date().toISOString()});
   }catch(err){
     errBox.innerHTML = `<div class="error-box">${err.message}</div>`;
   }
