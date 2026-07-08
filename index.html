@@ -310,7 +310,10 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
-const CATEGORIAS = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza","RH","SUP Almacén","SUP Armado"];
+const CATEGORIAS_DEFAULT = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza","RH","SUP Almacén","SUP Armado"];
+function categoriasDisponibles(){
+  return (state.categorias && state.categorias.length>0) ? state.categorias : CATEGORIAS_DEFAULT;
+}
 function fechaAniversario(fechaIngresoStr, n){
   const d = new Date(fechaIngresoStr+"T00:00:00");
   d.setFullYear(d.getFullYear()+n);
@@ -340,11 +343,13 @@ let state = {
   user: null,        // {nomina, nombre, isAdmin}
   employees: [],
   requests: [],
+  categorias: null,
   view: "empleados",
   loginError: "",
   loading: false,
   unsubEmployees: null,
   unsubRequests: null,
+  unsubCategorias: null,
 };
 
 const root = document.getElementById("root");
@@ -563,11 +568,16 @@ function attachListeners(){
     state.requests = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   });
+  state.unsubCategorias = onSnapshot(doc(db,"meta","categorias"), (snap)=>{
+    state.categorias = snap.exists() ? (snap.data().lista||[]) : null;
+    render();
+  });
 }
 function detachListeners(){
   if(state.unsubEmployees) state.unsubEmployees();
   if(state.unsubRequests) state.unsubRequests();
-  state.unsubEmployees=null; state.unsubRequests=null;
+  if(state.unsubCategorias) state.unsubCategorias();
+  state.unsubEmployees=null; state.unsubRequests=null; state.unsubCategorias=null;
 }
 
 /* ================= Cálculo de balance de un empleado ================= */
@@ -786,8 +796,12 @@ function renderTabEmpleados(container){
     <div class="card">
       <div class="toolbar">
         <h3 style="margin:0;">Empleados (${empleados.length})</h3>
-        <button class="btn-primary" style="width:auto;margin:0;" id="newEmpBtn">+ Nuevo empleado</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-ghost btn-small" id="manageCatBtn">Gestionar categorías</button>
+          <button class="btn-primary" style="width:auto;margin:0;" id="newEmpBtn">+ Nuevo empleado</button>
+        </div>
       </div>
+      <div id="catFormWrap"></div>
       <div id="empFormWrap"></div>
       ${empleados.length===0? `<div class="empty">Aún no hay empleados registrados.</div>` : `
       <table>
@@ -816,6 +830,7 @@ function renderTabEmpleados(container){
       `}
     </div>`;
   document.getElementById("newEmpBtn").addEventListener("click", ()=>renderEmpForm(null));
+  document.getElementById("manageCatBtn").addEventListener("click", ()=>renderCatForm());
   container.querySelectorAll("[data-edit]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const emp = state.employees.find(e=>e.nomina===btn.dataset.edit);
@@ -827,6 +842,58 @@ function renderTabEmpleados(container){
       if(confirm(`¿Eliminar al empleado con nómina ${btn.dataset.del}? Esto no borra su historial de solicitudes.`)){
         await deleteDoc(doc(db,"employees",btn.dataset.del));
       }
+    });
+  });
+}
+
+function renderCatForm(){
+  const wrap = document.getElementById("catFormWrap");
+  const lista = categoriasDisponibles();
+  wrap.innerHTML = `
+    <div class="card" style="background:var(--accent-soft);border:none;margin-bottom:20px;">
+      <h3>Categorías</h3>
+      <p class="hint">Estas son las categorías que se pueden asignar a cada empleado (se usan para colorear el calendario y avisar de choques de fechas dentro de la misma categoría). Puedes agregar, quitar o renombrar según lo que necesite tu empresa.</p>
+      <div id="catList" style="margin:14px 0;">
+        ${lista.length===0? `<div class="empty">No hay categorías todavía.</div>` : lista.map(c=>`
+          <div class="cal-legend-item">
+            <span><span class="cal-dot" style="background:${colorCategoria(c)};margin-right:6px;"></span>${c}</span>
+            <button class="btn-ghost btn-small" data-delcat="${c}">Quitar</button>
+          </div>`).join("")}
+      </div>
+      <div class="field-row">
+        <div>
+          <label>Nueva categoría</label>
+          <input id="catNueva" placeholder="Ej. Mantenimiento" />
+        </div>
+      </div>
+      <div id="catFormError"></div>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn-primary" style="width:auto;margin:0;" id="catAddBtn">Agregar</button>
+        <button class="btn-ghost" id="catCloseBtn">Cerrar</button>
+      </div>
+    </div>`;
+  document.getElementById("catCloseBtn").addEventListener("click", ()=>{wrap.innerHTML="";});
+  document.getElementById("catAddBtn").addEventListener("click", async ()=>{
+    const input = document.getElementById("catNueva");
+    const nueva = input.value.trim();
+    const errBox = document.getElementById("catFormError");
+    if(!nueva) return;
+    const actual = categoriasDisponibles();
+    if(actual.includes(nueva)){
+      errBox.innerHTML = `<div class="error-box">Esa categoría ya existe.</div>`;
+      return;
+    }
+    await setDoc(doc(db,"meta","categorias"), {lista:[...actual, nueva]});
+    renderCatForm();
+  });
+  wrap.querySelectorAll("[data-delcat]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const cat = btn.dataset.delcat;
+      const enUso = state.employees.filter(e=>e.categoria===cat).length;
+      if(enUso>0 && !confirm(`${enUso} empleado(s) tienen asignada la categoría "${cat}". Si la quitas, ellos la conservan en su ficha pero ya no podrás elegirla para nuevos empleados. ¿Continuar?`)) return;
+      const actual = categoriasDisponibles().filter(c=>c!==cat);
+      await setDoc(doc(db,"meta","categorias"), {lista:actual});
+      renderCatForm();
     });
   });
 }
@@ -874,7 +941,7 @@ function renderEmpForm(emp){
         <label>Categoría</label>
         <select id="f_categoria" required>
           <option value="" ${emp?.categoria? "" : "selected"} disabled>Selecciona una categoría…</option>
-          ${CATEGORIAS.map(c=>`<option value="${c}" ${emp?.categoria===c?"selected":""}>${c}</option>`).join("")}
+          ${categoriasDisponibles().map(c=>`<option value="${c}" ${emp?.categoria===c?"selected":""}>${c}</option>`).join("")}
         </select>
         <p class="hint">Se usa para colorear el calendario y avisar si dos personas de la misma categoría piden las mismas fechas.</p>
 
