@@ -178,6 +178,12 @@
   .cat-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
   .conflict-item{background:var(--danger-soft);color:var(--danger);border-radius:7px;padding:10px 12px;margin-bottom:8px;font-size:13px;line-height:1.5;}
   .cal-conflict{outline:2px solid var(--danger);outline-offset:-1px;}
+  .cal-festivo-oficial{background:var(--warm) !important;border-color:var(--warm);}
+  .cal-festivo-oficial .cal-daynum{color:#fff;font-weight:800;}
+  .cal-cumple{background:#7A4FA0 !important;border-color:#7A4FA0;}
+  .cal-cumple .cal-daynum{color:#fff;font-weight:800;}
+  .cal-festivo-marker{position:absolute;top:2px;right:3px;font-size:13px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,.35));}
+  .cal-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;box-shadow:0 0 0 1.5px #fff;}
 </style>
 </head>
 <body>
@@ -232,13 +238,55 @@ function antiguedadAnios(fechaIngresoStr){
   if (anniv > hoy) years -= 1;
   return Math.max(0, years);
 }
-function diasHabilesEntre(fi, ff){
+function pad2(n){ return String(n).padStart(2,"0"); }
+function toISODate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function primerLunes(year, monthIndex){
+  const d = new Date(year, monthIndex, 1);
+  const offset = (8 - d.getDay()) % 7;
+  d.setDate(1 + offset);
+  return d;
+}
+function tercerLunes(year, monthIndex){
+  const d = primerLunes(year, monthIndex);
+  d.setDate(d.getDate() + 14);
+  return d;
+}
+const FESTIVOS_CACHE = {};
+function festivosOficiales(year){
+  if(FESTIVOS_CACHE[year]) return FESTIVOS_CACHE[year];
+  const lista = [
+    {fecha:`${year}-01-01`, nombre:"Año Nuevo"},
+    {fecha:toISODate(primerLunes(year,1)), nombre:"Día de la Constitución"},
+    {fecha:toISODate(tercerLunes(year,2)), nombre:"Natalicio de Benito Juárez"},
+    {fecha:`${year}-05-01`, nombre:"Día del Trabajo"},
+    {fecha:`${year}-09-16`, nombre:"Día de la Independencia"},
+    {fecha:toISODate(tercerLunes(year,10)), nombre:"Día de la Revolución Mexicana"},
+    {fecha:`${year}-12-25`, nombre:"Navidad"},
+  ];
+  FESTIVOS_CACHE[year] = lista;
+  return lista;
+}
+function nombreFestivoOficial(dateStr){
+  const year = Number(dateStr.slice(0,4));
+  const f = festivosOficiales(year).find(f=>f.fecha===dateStr);
+  return f ? f.nombre : null;
+}
+function empleadosCumpleaniosEnDia(dateStr){
+  const md = dateStr.slice(5,10);
+  return state.employees.filter(e=>!e.isAdmin && e.fechaNacimiento && e.fechaNacimiento.slice(5,10)===md);
+}
+function esCumpleanos(dateStr, fechaNacimientoStr){
+  if(!fechaNacimientoStr) return false;
+  return dateStr.slice(5,10) === fechaNacimientoStr.slice(5,10);
+}
+function diasHabilesEntre(fi, ff, fechaNacimiento){
   const d1 = new Date(fi+"T00:00:00"), d2 = new Date(ff+"T00:00:00");
   if (d2 < d1) return 0;
   let count=0, cur=new Date(d1);
   while(cur<=d2){
     const day=cur.getDay();
-    if(day!==0) count++;
+    const dateStr = toISODate(cur);
+    if(day!==0 && !nombreFestivoOficial(dateStr) && !esCumpleanos(dateStr, fechaNacimiento)) count++;
     cur.setDate(cur.getDate()+1);
   }
   return count;
@@ -262,7 +310,7 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
-const CATEGORIAS = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza"];
+const CATEGORIAS = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza","RH","SUP Almacén","SUP Armado"];
 function fechaAniversario(fechaIngresoStr, n){
   const d = new Date(fechaIngresoStr+"T00:00:00");
   d.setFullYear(d.getFullYear()+n);
@@ -466,7 +514,7 @@ async function handleSetupAdmin(e){
       }
     }
     await setDoc(empRef, {
-      nomina, nombre, fechaIngreso: fecha, isAdmin:true, diasManual:null, activo:true
+      nomina, nombre, fechaIngreso: fecha, fechaNacimiento:null, isAdmin:true, diasManual:null, activo:true
     });
     await setDoc(doc(db,"meta","setup"), {creado:true, nomina, fecha: new Date().toISOString()});
   }catch(err){
@@ -620,7 +668,7 @@ function renderEmpleadoShell(){
           </div>
           <p class="hint">
             Un solo día = misma fecha en inicio y fin (ej. 02 al 02 de enero).
-            Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a sábado; el domingo no cuenta).
+            Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a sábado; domingos, días festivos oficiales y tu cumpleaños no cuentan).
             Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación.
           </p>
           <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
@@ -655,11 +703,16 @@ function renderEmpleadoShell(){
   const fiInput = document.getElementById("fi");
   const ffInput = document.getElementById("ff");
   function actualizarPreview(){
+function fechaNacimientoDe(nomina){
+  const emp = state.employees.find(e=>e.nomina===nomina);
+  return emp && emp.fechaNacimiento ? emp.fechaNacimiento : null;
+}
+
     // el fin no puede ser antes que el inicio
     if(fiInput.value) ffInput.min = fiInput.value;
     const preview = document.getElementById("diasPreview");
     if(fiInput.value && ffInput.value){
-      const dias = diasHabilesEntre(fiInput.value, ffInput.value);
+      const dias = diasHabilesEntre(fiInput.value, ffInput.value, fechaNacimientoDe(state.user.nomina));
       preview.textContent = dias>0
         ? `Esta solicitud equivale a ${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}.`
         : `Revisa las fechas: no hay ningún día hábil en ese rango.`;
@@ -684,7 +737,7 @@ async function handleNuevaSolicitud(e){
     errBox.innerHTML = `<div class="error-box">Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación. La fecha de inicio más próxima que puedes elegir es ${minInicio}.</div>`;
     return;
   }
-  const dias = diasHabilesEntre(fi,ff);
+  const dias = diasHabilesEntre(fi,ff, fechaNacimientoDe(state.user.nomina));
   if(dias<=0){
     errBox.innerHTML = `<div class="error-box">Revisa las fechas: la fecha de fin debe ser igual o posterior a la de inicio, y el rango debe incluir al menos un día hábil.</div>`;
     return;
@@ -807,10 +860,17 @@ function renderEmpForm(emp){
             <input type="date" id="f_fecha" value="${fechaActual}" required />
           </div>
           <div>
+            <label>Fecha de nacimiento (opcional)</label>
+            <input type="date" id="f_nacimiento" value="${emp?.fechaNacimiento||""}" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
             <label>Días anuales manuales (opcional)</label>
             <input type="number" min="0" id="f_manual" value="${emp?.diasManual ?? ""}" placeholder="Dejar vacío = calculado" />
           </div>
         </div>
+        <p class="hint">La fecha de nacimiento se puede dejar en blanco y agregar después; el día de su cumpleaños no se cuenta como día hábil para ese empleado.</p>
         <label>Categoría</label>
         <select id="f_categoria" required>
           <option value="" ${emp?.categoria? "" : "selected"} disabled>Selecciona una categoría…</option>
@@ -856,6 +916,8 @@ function renderEmpForm(emp){
     const nomina = document.getElementById("f_nomina").value.trim();
     const nombre = document.getElementById("f_nombre").value.trim();
     const fecha = document.getElementById("f_fecha").value;
+    const fechaNacimientoRaw = document.getElementById("f_nacimiento").value;
+    const fechaNacimiento = fechaNacimientoRaw === "" ? null : fechaNacimientoRaw;
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
     const categoria = document.getElementById("f_categoria").value;
@@ -874,9 +936,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -995,7 +1057,7 @@ function renderEditReqForm(req){
   const fiInput = document.getElementById("e_fi");
   const ffInput = document.getElementById("e_ff");
   function actualizarPreview(){
-    const dias = diasHabilesEntre(fiInput.value, ffInput.value);
+    const dias = diasHabilesEntre(fiInput.value, ffInput.value, fechaNacimientoDe(req.nomina));
     document.getElementById("editDiasPreview").textContent = dias>0
       ? `Nuevo total: ${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"} (antes eran ${req.diasHabiles}).`
       : "Revisa las fechas: no hay ningún día hábil en ese rango.";
@@ -1008,7 +1070,7 @@ function renderEditReqForm(req){
     e.preventDefault();
     const fi = fiInput.value, ff = ffInput.value;
     const errBox = document.getElementById("editReqError");
-    const dias = diasHabilesEntre(fi, ff);
+    const dias = diasHabilesEntre(fi, ff, fechaNacimientoDe(req.nomina));
     if(dias<=0){
       errBox.innerHTML = `<div class="error-box">Revisa las fechas: la fecha de fin debe ser igual o posterior a la de inicio, y el rango debe incluir al menos un día hábil.</div>`;
       return;
@@ -1107,19 +1169,47 @@ function construirCalendarioMes(year, month){
     const nombres = matches.map(r=>`${r.nombreEmpleado}${categoriaDe(r.nomina)?` (${categoriaDe(r.nomina)})`:""}`).join(", ");
     const tieneConflicto = diasConConflicto.has(dateStr);
     const dots = matches.slice(0,5).map(r=>`<span class="cal-dot" style="background:${colorCategoria(categoriaDe(r.nomina))}"></span>`).join("");
+    const festivoNombre = nombreFestivoOficial(dateStr);
+    const cumples = empleadosCumpleaniosEnDia(dateStr);
+    const esEspecial = festivoNombre || cumples.length>0;
+    const tituloPartes = [];
+    if(festivoNombre) tituloPartes.push(`Día festivo: ${festivoNombre}`);
+    if(cumples.length>0) tituloPartes.push(`Cumpleaños: ${cumples.map(e=>e.nombre).join(", ")}`);
+    if(nombres) tituloPartes.push(nombres);
+    if(tieneConflicto) tituloPartes.push("¡conflicto de categoría!");
+    const claseEspecial = festivoNombre ? 'cal-festivo-oficial' : (cumples.length>0 ? 'cal-cumple' : '');
     celdas += `
-      <div class="cal-cell ${matches.length>0?'cal-hasvac':''} ${tieneConflicto?'cal-conflict':''}" ${matches.length>0?`title="${nombres.replace(/"/g,'')}${tieneConflicto?' — ¡conflicto de categoría!':''}"`:""}>
+      <div class="cal-cell ${matches.length>0?'cal-hasvac':''} ${tieneConflicto?'cal-conflict':''} ${claseEspecial}" ${tituloPartes.length>0?`title="${tituloPartes.join(" · ").replace(/"/g,'')}"`:""}>
         <div class="cal-daynum">${d}</div>
+        ${claseEspecial? `<div class="cal-festivo-marker">${festivoNombre? "🎌" : "🎂"}</div>` : ""}
         ${matches.length>0? `<div style="position:absolute;bottom:4px;left:5px;display:flex;gap:2px;">${dots}</div>`:""}
         ${matches.length>0? `<div class="cal-badge" style="${tieneConflicto?'background:var(--danger);':''}">${matches.length}</div>`:""}
       </div>`;
   }
+
+  // Festivos oficiales y cumpleaños dentro de este mes, para la leyenda
+  const festivosDelMes = [];
+  for(let d=1; d<=diasEnMes; d++){
+    const dateStr = `${year}-${pad(month+1)}-${pad(d)}`;
+    const festivoNombre = nombreFestivoOficial(dateStr);
+    if(festivoNombre) festivosDelMes.push({fecha:dateStr, texto:festivoNombre, icono:"🎌"});
+    empleadosCumpleaniosEnDia(dateStr).forEach(e=>festivosDelMes.push({fecha:dateStr, texto:`Cumpleaños de ${e.nombre}`, icono:"🎂"}));
+  }
+  festivosDelMes.sort((a,b)=>a.fecha.localeCompare(b.fecha));
 
   return `
     <div class="cal-grid">
       ${DIAS_SEMANA.map(d=>`<div class="cal-cell cal-head">${d}</div>`).join("")}
       ${celdas}
     </div>
+    ${festivosDelMes.length>0? `
+      <div class="cal-legend" style="margin-top:14px;">
+        ${festivosDelMes.map(f=>`
+          <div class="cal-legend-item">
+            <span>${f.icono} ${f.texto}</span>
+            <span class="num">${f.fecha}</span>
+          </div>`).join("")}
+      </div>` : ""}
     ${conflictos.length>0 ? `
       <div style="margin-top:16px;">
         <h3 style="font-size:14.5px;color:var(--danger);">⚠ Conflictos de categoría este mes</h3>
@@ -1154,17 +1244,24 @@ function renderTabReportes(container){
   });
   const maxMes = Math.max(1,...porMes);
 
-  // por semana fiscal (número de semana ISO)
+  // por semana fiscal (número de semana ISO), solo de las semanas que caen
+  // dentro del mes que se está viendo arriba en el calendario
   const porSemana = {};
   aprobadas.forEach(r=>{
     const w = isoWeek(r.fechaInicio);
     porSemana[w] = (porSemana[w]||0) + r.diasHabiles;
   });
-  const semanasOrdenadas = Object.keys(porSemana).map(Number).sort((a,b)=>a-b);
+  const diasEnMesSel = new Date(anio, mes+1, 0).getDate();
+  const semanasDelMes = new Set();
+  for(let d=1; d<=diasEnMesSel; d++){
+    semanasDelMes.add(isoWeek(`${anio}-${pad2(mes+1)}-${pad2(d)}`));
+  }
+  const semanasOrdenadas = Object.keys(porSemana).map(Number).filter(w=>semanasDelMes.has(w)).sort((a,b)=>a-b);
 
-  const anios = [...new Set(state.requests.map(r=>r.fechaInicio? r.fechaInicio.slice(0,4):null).filter(Boolean))];
-  if(!anios.includes(String(anioActual))) anios.push(String(anioActual));
-  anios.sort();
+  const aniosConDatos = [...new Set(state.requests.map(r=>r.fechaInicio? r.fechaInicio.slice(0,4):null).filter(Boolean))].map(Number);
+  const rangoAnios = [];
+  for(let y=anioActual-2; y<=anioActual+4; y++) rangoAnios.push(y);
+  const anios = [...new Set([...rangoAnios, ...aniosConDatos, anioActual])].sort((a,b)=>a-b).map(String);
 
   container.innerHTML = `
     <div class="card">
@@ -1180,7 +1277,17 @@ function renderTabReportes(container){
         </div>
       </div>
       ${construirCalendarioMes(anio, mes)}
-      <p class="hint">El número en cada día es la cantidad de empleados de vacaciones. Pasa el cursor sobre un día marcado para ver quién (en celular, mantén presionado).</p>
+    </div>
+
+    <div class="card">
+      <h3>Días aprobados por semana fiscal (${MESES[mes]} ${anio})</h3>
+      ${semanasOrdenadas.length===0? `<div class="empty">No hay vacaciones aprobadas registradas en ${MESES[mes]} ${anio}.</div>` : `
+      <table>
+        <thead><tr><th>Semana del año</th><th>Días tomados (todos los empleados)</th></tr></thead>
+        <tbody>
+        ${semanasOrdenadas.map(w=>`<tr><td class="num">Semana ${w}</td><td class="num">${porSemana[w]}</td></tr>`).join("")}
+        </tbody>
+      </table>`}
     </div>
 
     <div class="card">
@@ -1201,18 +1308,6 @@ function renderTabReportes(container){
     </div>
 
     <div class="card">
-      <h3>Días aprobados por semana fiscal (${anio})</h3>
-      ${semanasOrdenadas.length===0? `<div class="empty">No hay vacaciones aprobadas registradas en ${anio}.</div>` : `
-      <table>
-        <thead><tr><th>Semana del año</th><th>Días tomados (todos los empleados)</th></tr></thead>
-        <tbody>
-        ${semanasOrdenadas.map(w=>`<tr><td class="num">Semana ${w}</td><td class="num">${porSemana[w]}</td></tr>`).join("")}
-        </tbody>
-      </table>`}
-      <p class="hint">Se numeran las semanas según el estándar ISO (semana 1 = la que contiene el primer jueves del año). Si tu calendario fiscal usa otra convención, puedes usar esta tabla como referencia y ajustarla.</p>
-    </div>
-
-    <div class="card">
       <h3>Resumen por empleado</h3>
       <table>
         <thead><tr><th>Nómina</th><th>Nombre</th><th>Categoría</th><th>Antigüedad</th><th>Días totales</th><th>Días tomados</th><th>Restantes</th></tr></thead>
@@ -1222,9 +1317,6 @@ function renderTabReportes(container){
           if(b.esAdmin){
             return `<tr><td class="num">${emp.nomina}</td><td>${emp.nombre}</td><td>${emp.categoria||"—"}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>`;
           }
-          // "Días totales" siempre es el que corresponde por antigüedad (o el manual, si RH puso uno fijo),
-          // sin inflar por el ajuste de días restantes. "Días tomados" se obtiene de ese total menos lo
-          // que le queda (restantes), y "restantes" ya considera el ajuste inicial si se agregó.
           const totalPorAntiguedad = (emp.diasManual!==null && emp.diasManual!==undefined) ? emp.diasManual : diasPorAntiguedad(b.antig);
           const tomadosCalc = Math.max(0, totalPorAntiguedad - b.restantes);
           return `<tr>
@@ -1239,7 +1331,6 @@ function renderTabReportes(container){
         }).join("")}
         </tbody>
       </table>
-      <p class="hint">"Días totales" es el que corresponde por antigüedad (o el fijo que RH haya puesto). "Días tomados" y "Restantes" son del periodo vigente de cada empleado (de su último aniversario de ingreso al siguiente) — si se anotó cuántos días le quedaban al darlo de alta, "Días tomados" ya lo toma en cuenta (ese campo es opcional). ⚙ = tiene ese ajuste activo para el periodo actual.</p>
     </div>`;
 
   document.getElementById("yearSelect").addEventListener("change",(e)=>{
