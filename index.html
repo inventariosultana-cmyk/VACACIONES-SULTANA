@@ -256,6 +256,18 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
+function fechaAniversario(fechaIngresoStr, n){
+  const d = new Date(fechaIngresoStr+"T00:00:00");
+  d.setFullYear(d.getFullYear()+n);
+  return d.toISOString().slice(0,10);
+}
+function calcularPeriodoActual(fechaIngresoStr){
+  const anios = antiguedadAnios(fechaIngresoStr);
+  const inicio = fechaAniversario(fechaIngresoStr, anios);
+  const inicioSiguiente = fechaAniversario(fechaIngresoStr, anios+1);
+  const fin = addDaysStr(inicioSiguiente, -1);
+  return {inicio, fin, anios};
+}
 const PALETA_CATEGORIAS = ["#2F6F5E","#C9793A","#5B7FBD","#A2557B","#3D8B5F","#7A5C3E","#4E8FA6","#8C6E4E","#6E6E9E","#9C6644"];
 function colorCategoria(cat){
   if(!cat) return "#A7B0AC";
@@ -489,13 +501,32 @@ function detachListeners(){
 /* ================= Cálculo de balance de un empleado ================= */
 function balanceDe(nomina){
   const emp = state.employees.find(e=>e.nomina===nomina);
-  if(!emp) return {antig:0, totales:0, tomados:0, restantes:0};
-  const antig = antiguedadAnios(emp.fechaIngreso);
-  const totales = (emp.diasManual!==null && emp.diasManual!==undefined) ? emp.diasManual : diasPorAntiguedad(antig);
-  const tomados = state.requests
-    .filter(r=>r.nomina===nomina && r.estado==="aprobado")
+  if(!emp) return {antig:0, totales:0, tomados:0, restantes:0, esAdmin:false, ajustado:false};
+  if(emp.isAdmin) return {antig:null, totales:null, tomados:null, restantes:null, esAdmin:true, ajustado:false};
+
+  const periodo = calcularPeriodoActual(emp.fechaIngreso);
+  const totalesCalculados = (emp.diasManual!==null && emp.diasManual!==undefined) ? emp.diasManual : diasPorAntiguedad(periodo.anios);
+
+  // Los días de un periodo que ya terminó NO se suman al siguiente: solo
+  // contamos aprobaciones cuya fecha de inicio cae dentro del periodo vigente.
+  const tomadosPeriodo = state.requests
+    .filter(r=>r.nomina===nomina && r.estado==="aprobado" && r.fechaInicio>=periodo.inicio && r.fechaInicio<=periodo.fin)
     .reduce((sum,r)=>sum+(r.diasHabiles||0),0);
-  return {antig, totales, tomados, restantes: Math.max(0,totales-tomados)};
+
+  // Ajuste manual de "días restantes": solo aplica si fue registrado para
+  // ESTE MISMO periodo vigente. En cuanto el periodo cambie (nuevo aniversario),
+  // deja de aplicar automáticamente y todo vuelve al cálculo normal.
+  const tieneAjuste = (emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined)
+    && emp.diasRestantesInicialesPeriodoInicio === periodo.inicio;
+
+  if(tieneAjuste){
+    const restantes = Math.max(0, emp.diasRestantesIniciales - tomadosPeriodo);
+    const totales = emp.diasRestantesIniciales + tomadosPeriodo;
+    return {antig:periodo.anios, totales, tomados:tomadosPeriodo, restantes, esAdmin:false, ajustado:true};
+  }
+
+  const restantes = Math.max(0, totalesCalculados - tomadosPeriodo);
+  return {antig:periodo.anios, totales:totalesCalculados, tomados:tomadosPeriodo, restantes, esAdmin:false, ajustado:false};
 }
 
 /* ================= Shell compartido (topbar) ================= */
@@ -534,7 +565,7 @@ function renderEmpleadoShell(){
             <div class="stub-value small">${b.antig} año${b.antig===1?"":"s"}</div>
           </div>
           <div class="stub-block">
-            <div class="stub-label">Días totales/año</div>
+            <div class="stub-label">Días totales (este periodo)</div>
             <div class="stub-value">${b.totales}</div>
           </div>
           <div class="stub-block">
@@ -546,6 +577,7 @@ function renderEmpleadoShell(){
             <div class="stub-value">${b.restantes}</div>
           </div>
         </div>
+        <p class="hint">Estos días son de tu periodo actual (de tu último aniversario al próximo). Si no los usas antes de tu siguiente aniversario, no se acumulan al año que sigue.</p>
       </div>
 
       <div class="card">
@@ -690,9 +722,9 @@ function renderTabEmpleados(container){
             <td class="num">${emp.nomina}</td>
             <td>${emp.nombre}</td>
             <td class="num">${emp.fechaIngreso}</td>
-            <td class="num">${b.antig}a</td>
-            <td class="num">${b.totales}${emp.diasManual!==null && emp.diasManual!==undefined?" *":""}</td>
-            <td class="num">${b.restantes}</td>
+            <td class="num">${b.esAdmin? "—" : b.antig+"a"}</td>
+            <td class="num">${b.esAdmin? "—" : b.totales+(emp.diasManual!==null && emp.diasManual!==undefined?" *":"")}</td>
+            <td class="num">${b.esAdmin? "—" : b.restantes+(b.ajustado?" ⚙":"")}</td>
             <td>${emp.categoria? `<span class="cat-chip"><span class="cat-dot" style="background:${colorCategoria(emp.categoria)}"></span>${emp.categoria}</span>` : "—"}</td>
             <td>${emp.isAdmin?"Admin":"Empleado"}</td>
             <td class="row-actions">
@@ -703,7 +735,7 @@ function renderTabEmpleados(container){
         }).join("")}
         </tbody>
       </table>
-      <p class="hint">* días ajustados manualmente por RH (no calculados por antigüedad).</p>
+      <p class="hint">* días ajustados manualmente por RH (total anual fijo, no calculado por antigüedad). ⚙ ajuste de días restantes vigente para el periodo actual del empleado (dejará de aplicar automáticamente en su próximo aniversario). Los administradores no acumulan ni solicitan días, por eso muestran "—".</p>
       `}
     </div>`;
   document.getElementById("newEmpBtn").addEventListener("click", ()=>renderEmpForm(null));
@@ -725,6 +757,12 @@ function renderTabEmpleados(container){
 function renderEmpForm(emp){
   const wrap = document.getElementById("empFormWrap");
   const esNuevo = !emp;
+  const fechaActual = emp?.fechaIngreso || "";
+  const periodoPreview = fechaActual ? calcularPeriodoActual(fechaActual) : null;
+  const ajusteVigente = emp && periodoPreview && emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined
+    && emp.diasRestantesInicialesPeriodoInicio === periodoPreview.inicio;
+  const ajusteVencido = emp && emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined && !ajusteVigente;
+
   wrap.innerHTML = `
     <div class="card" style="background:var(--accent-soft);border:none;margin-bottom:20px;">
       <h3>${esNuevo? "Nuevo empleado" : "Editar empleado"}</h3>
@@ -742,7 +780,7 @@ function renderEmpForm(emp){
         <div class="field-row">
           <div>
             <label>Fecha de ingreso</label>
-            <input type="date" id="f_fecha" value="${emp?.fechaIngreso||""}" required />
+            <input type="date" id="f_fecha" value="${fechaActual}" required />
           </div>
           <div>
             <label>Días anuales manuales (opcional)</label>
@@ -755,10 +793,19 @@ function renderEmpForm(emp){
           ${[...new Set(state.employees.map(e=>e.categoria).filter(Boolean))].map(c=>`<option value="${c}"></option>`).join("")}
         </datalist>
         <p class="hint">Se usa para colorear el calendario y avisar si dos personas de la misma categoría piden las mismas fechas.</p>
+
+        <label>Días restantes en su periodo actual (opcional)</label>
+        <input type="number" min="0" id="f_restantes" value="${emp?.diasRestantesIniciales ?? ""}" placeholder="Dejar vacío = sin ajuste manual" />
+        <p class="hint" id="periodoHint"></p>
+        ${ajusteVigente? `<p class="hint" style="color:var(--accent-dark);">⚙ Ajuste activo para el periodo vigente.</p>` : ""}
+        ${ajusteVencido? `<p class="hint" style="color:var(--warm);">Este empleado tenía un ajuste, pero era de un periodo anterior; ya no se está aplicando (el sistema ya calcula el periodo actual de forma automática). Si quieres corregir el periodo actual, vuelve a escribir el número de días restantes.</p>` : ""}
+        <p class="hint">Anota cuántos días le <strong>quedan</strong> por tomar en su periodo actual (no el total). Úsalo solo la primera vez que registras a alguien que ya había tomado vacaciones antes de usar este sistema. Este ajuste solo aplica al periodo vigente; cuando termine (en su próximo aniversario), el sistema vuelve a calcular automático sin que tengas que hacer nada.</p>
+
         <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
           <input type="checkbox" id="f_admin" style="width:auto;" ${emp?.isAdmin?"checked":""} />
           <span style="font-weight:600;font-size:13.5px;color:var(--ink);">Es administrador</span>
         </label>
+        <p class="hint">Los administradores no solicitan vacaciones dentro del sistema, así que no se les calculan días.</p>
         ${esNuevo? `<p class="hint">La contraseña la elige el propio empleado la primera vez que inicia sesión con este número de nómina.</p>`:""}
         <div id="empFormError"></div>
         <div style="display:flex;gap:10px;margin-top:16px;">
@@ -768,6 +815,18 @@ function renderEmpForm(emp){
       </form>
     </div>`;
   document.getElementById("cancelEmpForm").addEventListener("click", ()=>{wrap.innerHTML="";});
+  const fechaInput = document.getElementById("f_fecha");
+  function actualizarPeriodoHint(){
+    const hint = document.getElementById("periodoHint");
+    if(fechaInput.value){
+      const p = calcularPeriodoActual(fechaInput.value);
+      hint.textContent = `Periodo vigente de este empleado: ${p.inicio} a ${p.fin}.`;
+    } else {
+      hint.textContent = "";
+    }
+  }
+  actualizarPeriodoHint();
+  fechaInput.addEventListener("change", actualizarPeriodoHint);
   document.getElementById("empForm").addEventListener("submit", async (e)=>{
     e.preventDefault();
     const nomina = document.getElementById("f_nomina").value.trim();
@@ -776,6 +835,12 @@ function renderEmpForm(emp){
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
     const categoria = document.getElementById("f_categoria").value.trim();
+    const restantesRaw = document.getElementById("f_restantes").value;
+    let diasRestantesIniciales = null, diasRestantesInicialesPeriodoInicio = null;
+    if(restantesRaw !== ""){
+      diasRestantesIniciales = Number(restantesRaw);
+      diasRestantesInicialesPeriodoInicio = calcularPeriodoActual(fecha).inicio;
+    }
     const isAdmin = document.getElementById("f_admin").checked;
     const errBox = document.getElementById("empFormError");
     try{
@@ -785,9 +850,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, diasManual, categoria, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, diasManual, categoria, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -803,6 +868,7 @@ function renderTabSolicitudes(container){
     .sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
 
   container.innerHTML = `
+    <div id="editReqFormWrap"></div>
     <div class="card">
       <h3>Pendientes de aprobación (${pendientes.length})</h3>
       ${pendientes.length===0? `<div class="empty">No hay solicitudes pendientes.</div>` : `
@@ -821,6 +887,7 @@ function renderTabSolicitudes(container){
             <td class="row-actions">
               <button class="btn-success btn-small" data-approve="${r.id}">Aprobar</button>
               <button class="btn-danger btn-small" data-reject="${r.id}">Rechazar</button>
+              <button class="btn-ghost btn-small" data-editreq="${r.id}">Editar</button>
               <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
             </td>
           </tr>`).join("")}
@@ -846,6 +913,7 @@ function renderTabSolicitudes(container){
             <td class="num">${r.diasHabiles}</td>
             <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
             <td class="row-actions">
+              <button class="btn-ghost btn-small" data-editreq="${r.id}">Editar</button>
               <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
             </td>
           </tr>`).join("")}
@@ -863,10 +931,80 @@ function renderTabSolicitudes(container){
   container.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", ()=>borrarSolicitud(btn.dataset.del));
   });
+  container.querySelectorAll("[data-editreq]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const req = state.requests.find(r=>r.id===btn.dataset.editreq);
+      renderEditReqForm(req);
+    });
+  });
   const borrarTodoBtn = document.getElementById("borrarTodoBtn");
   if(borrarTodoBtn){
     borrarTodoBtn.addEventListener("click", ()=>borrarTodoElHistorial(resueltas));
   }
+}
+
+function renderEditReqForm(req){
+  const wrap = document.getElementById("editReqFormWrap");
+  wrap.innerHTML = `
+    <div class="card" style="background:var(--accent-soft);border:none;">
+      <h3>Editar solicitud de ${req.nombreEmpleado}</h3>
+      <p class="hint">Estatus actual: <span class="status ${req.estado}">${req.estado.toUpperCase()}</span>. Ajusta las fechas para aumentar o disminuir los días; el saldo del empleado se recalcula solo.</p>
+      <form id="editReqForm">
+        <div class="field-row">
+          <div>
+            <label>Fecha de inicio</label>
+            <input type="date" id="e_fi" value="${req.fechaInicio}" required />
+          </div>
+          <div>
+            <label>Fecha de fin</label>
+            <input type="date" id="e_ff" value="${req.fechaFin}" required />
+          </div>
+        </div>
+        <div id="editDiasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+        <div id="editReqError"></div>
+        <div style="display:flex;gap:10px;margin-top:16px;">
+          <button class="btn-primary" style="width:auto;margin:0;" type="submit">Guardar cambios</button>
+          <button class="btn-ghost" type="button" id="cancelEditReq">Cancelar</button>
+        </div>
+      </form>
+    </div>`;
+  const fiInput = document.getElementById("e_fi");
+  const ffInput = document.getElementById("e_ff");
+  function actualizarPreview(){
+    const dias = diasHabilesEntre(fiInput.value, ffInput.value);
+    document.getElementById("editDiasPreview").textContent = dias>0
+      ? `Nuevo total: ${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"} (antes eran ${req.diasHabiles}).`
+      : "Revisa las fechas: no hay ningún día hábil en ese rango.";
+  }
+  actualizarPreview();
+  fiInput.addEventListener("change", actualizarPreview);
+  ffInput.addEventListener("change", actualizarPreview);
+  document.getElementById("cancelEditReq").addEventListener("click", ()=>{wrap.innerHTML="";});
+  document.getElementById("editReqForm").addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const fi = fiInput.value, ff = ffInput.value;
+    const errBox = document.getElementById("editReqError");
+    const dias = diasHabilesEntre(fi, ff);
+    if(dias<=0){
+      errBox.innerHTML = `<div class="error-box">Revisa las fechas: la fecha de fin debe ser igual o posterior a la de inicio, y el rango debe incluir al menos un día hábil.</div>`;
+      return;
+    }
+    if(req.estado==="aprobado"){
+      const cat = categoriaDe(req.nomina);
+      if(cat){
+        const enConflicto = state.requests.filter(r=>
+          r.id!==req.id && r.estado==="aprobado" && r.nomina!==req.nomina &&
+          categoriaDe(r.nomina)===cat && fi<=r.fechaFin && r.fechaInicio<=ff
+        );
+        if(enConflicto.length>0){
+          const detalle = enConflicto.map(r=>`- ${r.nombreEmpleado} (${r.fechaInicio} a ${r.fechaFin})`).join("\n");
+          if(!confirm(`Aviso: con estas nuevas fechas se cruza con otra persona de la misma categoría "${cat}":\n\n${detalle}\n\n¿Guardar de todas formas?`)) return;
+        }
+      }
+    }
+    await updateDoc(doc(db,"requests",req.id), {fechaInicio:fi, fechaFin:ff, diasHabiles:dias});
+    wrap.innerHTML="";
+  });
 }
 
 async function borrarSolicitud(id){
