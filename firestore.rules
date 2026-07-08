@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function estaConectado() {
+      return request.auth != null;
+    }
+    function miNomina() {
+      return request.auth.token.email.split('@')[0];
+    }
+    function esAdmin() {
+      return estaConectado() &&
+        get(/databases/$(database)/documents/employees/$(miNomina())).data.isAdmin == true;
+    }
+
+    // Datos de empleados: cualquiera que esté logueado puede leer
+    // (lo necesitan para ver antigüedad/días de sus compañeros en reportes),
+    // pero solo el administrador puede crear, editar o borrar.
+    match /employees/{nomina} {
+      allow read: if estaConectado();
+      allow write: if esAdmin();
+    }
+
+    // Solicitudes de vacaciones: un empleado solo puede crear solicitudes
+    // a su propio nombre y leer las suyas. El administrador puede leer,
+    // aprobar o rechazar cualquiera.
+    match /requests/{requestId} {
+      allow read: if estaConectado() && (esAdmin() || resource.data.nomina == miNomina());
+      allow create: if estaConectado() && request.resource.data.nomina == miNomina();
+      allow update, delete: if esAdmin();
+    }
+  }
+}
