@@ -177,7 +177,7 @@ const firebaseConfig = {
   appId: "1:63167258102:web:ee763a83c1d90dfe833bd7"
 };
 
-const CONFIG_PENDING = firebaseConfig.apiKey === "AIzaSyDibHYHP_xwWtGMPLJXQPivcKncbd9pTr0";
+const CONFIG_PENDING = !firebaseConfig.apiKey || firebaseConfig.apiKey.includes("TU_API_KEY");
 
 let app, auth, db;
 if (!CONFIG_PENDING) {
