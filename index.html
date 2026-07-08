@@ -168,6 +168,10 @@
   .cal-legend{margin-top:14px;font-size:13px;}
   .cal-legend-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);}
   .cal-legend-item:last-child{border-bottom:none;}
+  .cat-chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;}
+  .cat-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
+  .conflict-item{background:var(--danger-soft);color:var(--danger);border-radius:7px;padding:10px 12px;margin-bottom:8px;font-size:13px;line-height:1.5;}
+  .cal-conflict{outline:2px solid var(--danger);outline-offset:-1px;}
 </style>
 </head>
 <body>
@@ -228,7 +232,7 @@ function diasHabilesEntre(fi, ff){
   let count=0, cur=new Date(d1);
   while(cur<=d2){
     const day=cur.getDay();
-    if(day!==0 && day!==6) count++;
+    if(day!==0) count++;
     cur.setDate(cur.getDate()+1);
   }
   return count;
@@ -252,6 +256,17 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
+const PALETA_CATEGORIAS = ["#2F6F5E","#C9793A","#5B7FBD","#A2557B","#3D8B5F","#7A5C3E","#4E8FA6","#8C6E4E","#6E6E9E","#9C6644"];
+function colorCategoria(cat){
+  if(!cat) return "#A7B0AC";
+  let hash=0;
+  for(let i=0;i<cat.length;i++) hash = cat.charCodeAt(i) + ((hash<<5)-hash);
+  return PALETA_CATEGORIAS[Math.abs(hash) % PALETA_CATEGORIAS.length];
+}
+function categoriaDe(nomina){
+  const emp = state.employees.find(e=>e.nomina===nomina);
+  return emp && emp.categoria ? emp.categoria.trim() : "";
+}
 
 /* ================= Estado ================= */
 let state = {
@@ -549,7 +564,7 @@ function renderEmpleadoShell(){
           </div>
           <p class="hint">
             Un solo día = misma fecha en inicio y fin (ej. 02 al 02 de enero).
-            Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a viernes).
+            Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a sábado; el domingo no cuenta).
             Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación.
           </p>
           <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
@@ -667,7 +682,7 @@ function renderTabEmpleados(container){
       <div id="empFormWrap"></div>
       ${empleados.length===0? `<div class="empty">Aún no hay empleados registrados.</div>` : `
       <table>
-        <thead><tr><th>Nómina</th><th>Nombre</th><th>Ingreso</th><th>Antigüedad</th><th>Días/año</th><th>Restantes</th><th>Rol</th><th></th></tr></thead>
+        <thead><tr><th>Nómina</th><th>Nombre</th><th>Ingreso</th><th>Antigüedad</th><th>Días/año</th><th>Restantes</th><th>Categoría</th><th>Rol</th><th></th></tr></thead>
         <tbody>
         ${empleados.map(emp=>{
           const b = balanceDe(emp.nomina);
@@ -678,6 +693,7 @@ function renderTabEmpleados(container){
             <td class="num">${b.antig}a</td>
             <td class="num">${b.totales}${emp.diasManual!==null && emp.diasManual!==undefined?" *":""}</td>
             <td class="num">${b.restantes}</td>
+            <td>${emp.categoria? `<span class="cat-chip"><span class="cat-dot" style="background:${colorCategoria(emp.categoria)}"></span>${emp.categoria}</span>` : "—"}</td>
             <td>${emp.isAdmin?"Admin":"Empleado"}</td>
             <td class="row-actions">
               <button class="btn-ghost btn-small" data-edit="${emp.nomina}">Editar</button>
@@ -733,6 +749,12 @@ function renderEmpForm(emp){
             <input type="number" min="0" id="f_manual" value="${emp?.diasManual ?? ""}" placeholder="Dejar vacío = calculado" />
           </div>
         </div>
+        <label>Categoría / departamento (opcional)</label>
+        <input id="f_categoria" list="listaCategorias" value="${emp?.categoria||""}" placeholder="Ej. Ventas, Producción, Administración…" />
+        <datalist id="listaCategorias">
+          ${[...new Set(state.employees.map(e=>e.categoria).filter(Boolean))].map(c=>`<option value="${c}"></option>`).join("")}
+        </datalist>
+        <p class="hint">Se usa para colorear el calendario y avisar si dos personas de la misma categoría piden las mismas fechas.</p>
         <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
           <input type="checkbox" id="f_admin" style="width:auto;" ${emp?.isAdmin?"checked":""} />
           <span style="font-weight:600;font-size:13.5px;color:var(--ink);">Es administrador</span>
@@ -753,6 +775,7 @@ function renderEmpForm(emp){
     const fecha = document.getElementById("f_fecha").value;
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
+    const categoria = document.getElementById("f_categoria").value.trim();
     const isAdmin = document.getElementById("f_admin").checked;
     const errBox = document.getElementById("empFormError");
     try{
@@ -762,9 +785,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, diasManual, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, diasManual, categoria, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, diasManual, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, diasManual, categoria, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -784,12 +807,13 @@ function renderTabSolicitudes(container){
       <h3>Pendientes de aprobación (${pendientes.length})</h3>
       ${pendientes.length===0? `<div class="empty">No hay solicitudes pendientes.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Del</th><th>Al</th><th>Días</th><th>Comentario</th><th></th></tr></thead>
+        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Comentario</th><th></th></tr></thead>
         <tbody>
         ${pendientes.map(r=>`
           <tr>
             <td>${r.nombreEmpleado}</td>
             <td class="num">${r.nomina}</td>
+            <td>${categoriaDe(r.nomina)||"—"}</td>
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
             <td class="num">${r.diasHabiles}</td>
@@ -797,28 +821,37 @@ function renderTabSolicitudes(container){
             <td class="row-actions">
               <button class="btn-success btn-small" data-approve="${r.id}">Aprobar</button>
               <button class="btn-danger btn-small" data-reject="${r.id}">Rechazar</button>
+              <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
             </td>
           </tr>`).join("")}
         </tbody>
       </table>`}
     </div>
     <div class="card">
-      <h3>Historial resuelto</h3>
+      <div class="toolbar">
+        <h3 style="margin:0;">Historial resuelto</h3>
+        ${resueltas.length>0? `<button class="btn-danger btn-small" id="borrarTodoBtn">Borrar todo el historial</button>`:""}
+      </div>
       ${resueltas.length===0? `<div class="empty">Todavía no hay solicitudes resueltas.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Del</th><th>Al</th><th>Días</th><th>Estatus</th></tr></thead>
+        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Estatus</th><th></th></tr></thead>
         <tbody>
         ${resueltas.map(r=>`
           <tr>
             <td>${r.nombreEmpleado}</td>
             <td class="num">${r.nomina}</td>
+            <td>${categoriaDe(r.nomina)||"—"}</td>
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
             <td class="num">${r.diasHabiles}</td>
             <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
+            <td class="row-actions">
+              <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
+            </td>
           </tr>`).join("")}
         </tbody>
       </table>`}
+      <p class="hint">"Borrar todo el historial" solo elimina las solicitudes ya aprobadas o rechazadas; las pendientes no se tocan.</p>
     </div>`;
 
   container.querySelectorAll("[data-approve]").forEach(btn=>{
@@ -827,12 +860,48 @@ function renderTabSolicitudes(container){
   container.querySelectorAll("[data-reject]").forEach(btn=>{
     btn.addEventListener("click", ()=>resolverSolicitud(btn.dataset.reject,"rechazado"));
   });
+  container.querySelectorAll("[data-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>borrarSolicitud(btn.dataset.del));
+  });
+  const borrarTodoBtn = document.getElementById("borrarTodoBtn");
+  if(borrarTodoBtn){
+    borrarTodoBtn.addEventListener("click", ()=>borrarTodoElHistorial(resueltas));
+  }
+}
+
+async function borrarSolicitud(id){
+  if(confirm("¿Eliminar esta solicitud? Esta acción no se puede deshacer.")){
+    await deleteDoc(doc(db,"requests",id));
+  }
+}
+
+async function borrarTodoElHistorial(resueltas){
+  if(!confirm(`¿Eliminar las ${resueltas.length} solicitudes resueltas (aprobadas/rechazadas)? Esta acción no se puede deshacer.`)) return;
+  for(const r of resueltas){
+    await deleteDoc(doc(db,"requests",r.id));
+  }
 }
 
 async function resolverSolicitud(id, estado){
+  const req = state.requests.find(r=>r.id===id);
   let comentarioAdmin = "";
   if(estado==="rechazado"){
     comentarioAdmin = prompt("Motivo del rechazo (opcional):") || "";
+  }
+  if(estado==="aprobado" && req){
+    const cat = categoriaDe(req.nomina);
+    if(cat){
+      const enConflicto = state.requests.filter(r=>
+        r.id!==id && r.estado==="aprobado" && r.nomina!==req.nomina &&
+        categoriaDe(r.nomina)===cat &&
+        r.fechaInicio<=req.fechaFin && req.fechaInicio<=r.fechaFin
+      );
+      if(enConflicto.length>0){
+        const detalle = enConflicto.map(r=>`- ${r.nombreEmpleado} (${r.fechaInicio} a ${r.fechaFin})`).join("\n");
+        const continuar = confirm(`Aviso: ya hay vacaciones aprobadas de la misma categoría "${cat}" en fechas que se cruzan:\n\n${detalle}\n\n¿Aprobar de todas formas?`);
+        if(!continuar) return;
+      }
+    }
   }
   await updateDoc(doc(db,"requests",id), {estado, comentarioAdmin});
 }
@@ -842,36 +911,65 @@ function construirCalendarioMes(year, month){
   const primerDia = new Date(year,month,1).getDay();
   const diasEnMes = new Date(year,month+1,0).getDate();
   const aprobadas = state.requests.filter(r=>r.estado==="aprobado");
+  const finMes = `${year}-${pad(month+1)}-${pad(diasEnMes)}`;
+  const inicioMes = `${year}-${pad(month+1)}-01`;
+
+  // Conflictos: pares de solicitudes aprobadas, de empleados distintos,
+  // con la misma categoría, cuyas fechas se cruzan en algún punto de este mes.
+  const enEsteMes = aprobadas.filter(r=>r.fechaInicio<=finMes && r.fechaFin>=inicioMes)
+    .sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
+  const conflictos = [];
+  const diasConConflicto = new Set();
+  for(let i=0;i<enEsteMes.length;i++){
+    for(let j=i+1;j<enEsteMes.length;j++){
+      const a=enEsteMes[i], b=enEsteMes[j];
+      if(a.nomina===b.nomina) continue;
+      const catA = categoriaDe(a.nomina), catB = categoriaDe(b.nomina);
+      if(!catA || catA!==catB) continue;
+      const inicioSolape = a.fechaInicio > b.fechaInicio ? a.fechaInicio : b.fechaInicio;
+      const finSolape = a.fechaFin < b.fechaFin ? a.fechaFin : b.fechaFin;
+      if(inicioSolape<=finSolape){
+        conflictos.push({categoria:catA, a, b, inicioSolape, finSolape});
+        let cur = new Date(inicioSolape+"T00:00:00");
+        const fin = new Date(finSolape+"T00:00:00");
+        while(cur<=fin){ diasConConflicto.add(`${cur.getFullYear()}-${pad(cur.getMonth()+1)}-${pad(cur.getDate())}`); cur.setDate(cur.getDate()+1); }
+      }
+    }
+  }
 
   let celdas = "";
   for(let i=0;i<primerDia;i++) celdas += `<div class="cal-cell cal-empty"></div>`;
   for(let d=1; d<=diasEnMes; d++){
     const dateStr = `${year}-${pad(month+1)}-${pad(d)}`;
     const matches = aprobadas.filter(r=>r.fechaInicio<=dateStr && r.fechaFin>=dateStr);
-    const nombres = matches.map(r=>r.nombreEmpleado).join(", ");
+    const nombres = matches.map(r=>`${r.nombreEmpleado}${categoriaDe(r.nomina)?` (${categoriaDe(r.nomina)})`:""}`).join(", ");
+    const tieneConflicto = diasConConflicto.has(dateStr);
+    const dots = matches.slice(0,5).map(r=>`<span class="cal-dot" style="background:${colorCategoria(categoriaDe(r.nomina))}"></span>`).join("");
     celdas += `
-      <div class="cal-cell ${matches.length>0?'cal-hasvac':''}" ${matches.length>0?`title="${nombres.replace(/"/g,'')}"`:""}>
+      <div class="cal-cell ${matches.length>0?'cal-hasvac':''} ${tieneConflicto?'cal-conflict':''}" ${matches.length>0?`title="${nombres.replace(/"/g,'')}${tieneConflicto?' — ¡conflicto de categoría!':''}"`:""}>
         <div class="cal-daynum">${d}</div>
-        ${matches.length>0? `<div class="cal-badge">${matches.length}</div>`:""}
+        ${matches.length>0? `<div style="position:absolute;bottom:4px;left:5px;display:flex;gap:2px;">${dots}</div>`:""}
+        ${matches.length>0? `<div class="cal-badge" style="${tieneConflicto?'background:var(--danger);':''}">${matches.length}</div>`:""}
       </div>`;
   }
-
-  // lista de quién está de vacaciones, para la leyenda (más legible en celular)
-  const enEsteMes = aprobadas.filter(r=>{
-    const finMes = `${year}-${pad(month+1)}-${pad(diasEnMes)}`;
-    const inicioMes = `${year}-${pad(month+1)}-01`;
-    return r.fechaInicio<=finMes && r.fechaFin>=inicioMes;
-  }).sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
 
   return `
     <div class="cal-grid">
       ${DIAS_SEMANA.map(d=>`<div class="cal-cell cal-head">${d}</div>`).join("")}
       ${celdas}
     </div>
+    ${conflictos.length>0 ? `
+      <div style="margin-top:16px;">
+        <h3 style="font-size:14.5px;color:var(--danger);">⚠ Conflictos de categoría este mes</h3>
+        ${conflictos.map(c=>`
+          <div class="conflict-item">
+            Misma categoría <strong>"${c.categoria}"</strong>: <strong>${c.a.nombreEmpleado}</strong> (${c.a.fechaInicio} a ${c.a.fechaFin}) y <strong>${c.b.nombreEmpleado}</strong> (${c.b.fechaInicio} a ${c.b.fechaFin}) se cruzan del ${c.inicioSolape} al ${c.finSolape}.
+          </div>`).join("")}
+      </div>` : ""}
     <div class="cal-legend">
       ${enEsteMes.length===0? `<div class="empty">Nadie tiene vacaciones aprobadas este mes.</div>` : enEsteMes.map(r=>`
         <div class="cal-legend-item">
-          <span>${r.nombreEmpleado}</span>
+          <span><span class="cal-dot" style="background:${colorCategoria(categoriaDe(r.nomina))};margin-right:6px;"></span>${r.nombreEmpleado}${categoriaDe(r.nomina)?` · ${categoriaDe(r.nomina)}`:""}</span>
           <span class="num">${r.fechaInicio} → ${r.fechaFin}</span>
         </div>`).join("")}
     </div>`;
