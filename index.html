@@ -639,6 +639,14 @@ function primaYaSolicitadaEstePeriodo(nomina){
   const emp = state.employees.find(e=>e.nomina===nomina);
   if(!emp) return null;
   const periodo = calcularPeriodoActual(emp.fechaIngreso);
+
+  // Marcado manual por RH (ej. se le pagó antes de usar el sistema, o fuera
+  // de una solicitud). Solo aplica al periodo vigente; en el siguiente
+  // periodo se libera solo, sin que RH tenga que hacer nada.
+  if(emp.primaPagadaManual && emp.primaPagadaManualPeriodoInicio === periodo.inicio){
+    return { manual:true, fechaInicio: "registrado manualmente por RH" };
+  }
+
   return state.requests.find(r=>
     r.nomina===nomina && r.solicitaPrima && r.estado!=="rechazado" &&
     r.fechaInicio>=periodo.inicio && r.fechaInicio<=periodo.fin
@@ -719,7 +727,7 @@ function renderEmpleadoShell(){
           <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
 
           ${primaPrevia ? `
-            <p class="hint">Ya solicitaste tu prima vacacional este periodo (con la solicitud del ${primaPrevia.fechaInicio}). Solo se puede una vez por periodo.</p>
+            <p class="hint">${primaPrevia.manual ? "Tu prima vacacional de este periodo ya fue marcada como pagada por RH." : `Ya solicitaste tu prima vacacional este periodo (con la solicitud del ${primaPrevia.fechaInicio}).`} Solo se puede una vez por periodo.</p>
           ` : `
             <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
               <input type="checkbox" id="solicitaPrima" style="width:auto;" />
@@ -1031,6 +1039,8 @@ function renderEmpForm(emp){
   const ajusteVigente = emp && periodoPreview && emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined
     && emp.diasRestantesInicialesPeriodoInicio === periodoPreview.inicio;
   const ajusteVencido = emp && emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined && !ajusteVigente;
+  const primaPagadaVigente = emp && periodoPreview && emp.primaPagadaManual && emp.primaPagadaManualPeriodoInicio === periodoPreview.inicio;
+  const primaPagadaVencida = emp && emp.primaPagadaManual && !primaPagadaVigente;
 
   wrap.innerHTML = `
     <div class="card" style="background:var(--accent-soft);border:none;margin-bottom:20px;">
@@ -1085,6 +1095,14 @@ function renderEmpForm(emp){
         <p class="hint">Anota cuántos días le <strong>quedan</strong> por tomar en su periodo actual (no el total). Úsalo solo la primera vez que registras a alguien que ya había tomado vacaciones antes de usar este sistema. Este ajuste solo aplica al periodo vigente; cuando termine (en su próximo aniversario), el sistema vuelve a calcular automático sin que tengas que hacer nada.</p>
 
         <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
+          <input type="checkbox" id="f_primaPagada" style="width:auto;" ${primaPagadaVigente?"checked":""} />
+          <span style="font-weight:600;font-size:13.5px;color:var(--ink);">Ya se le pagó su prima vacacional de este periodo (fuera del sistema)</span>
+        </label>
+        ${primaPagadaVigente? `<p class="hint" style="color:var(--accent-dark);">⚙ Marcada como pagada para el periodo vigente: no se le ofrecerá la opción de volver a solicitarla hasta el siguiente periodo.</p>` : ""}
+        ${primaPagadaVencida? `<p class="hint" style="color:var(--warm);">Tenía una marca de prima pagada, pero era de un periodo anterior; ya no aplica (se renovó solo). Si ya le pagaste la de este nuevo periodo, vuelve a marcar la casilla y guarda.</p>` : ""}
+        <p class="hint">Márcala solo si ya se le pagó la prima de este periodo por fuera de una solicitud (por ejemplo, antes de usar el sistema). Esto evita que aparezca la opción de solicitarla de nuevo hasta su siguiente periodo, cuando se libera sola.</p>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
           <input type="checkbox" id="f_admin" style="width:auto;" ${emp?.isAdmin?"checked":""} />
           <span style="font-weight:600;font-size:13.5px;color:var(--ink);">Es administrador</span>
         </label>
@@ -1128,6 +1146,8 @@ function renderEmpForm(emp){
       diasRestantesInicialesPeriodoInicio = calcularPeriodoActual(fecha).inicio;
     }
     const isAdmin = document.getElementById("f_admin").checked;
+    const primaPagadaManual = document.getElementById("f_primaPagada").checked;
+    const primaPagadaManualPeriodoInicio = primaPagadaManual ? calcularPeriodoActual(fecha).inicio : null;
     const errBox = document.getElementById("empFormError");
     try{
       if(esNuevo){
@@ -1136,9 +1156,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -1201,7 +1221,7 @@ function renderTabSolicitudes(container){
             <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
             <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
             <td class="row-actions">
-              ${r.estado==="aprobado"? `<button class="btn-ghost btn-small" data-boleta="${r.id}">Boleta PDF</button>`:""}
+              ${r.estado==="aprobado"? `<button class="btn-ghost btn-small" data-imprimir="${r.id}">Imprimir boleta</button><button class="btn-ghost btn-small" data-descargar="${r.id}">Descargar PDF</button>`:""}
               <button class="btn-ghost btn-small" data-editreq="${r.id}">Editar</button>
               <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
             </td>
@@ -1220,8 +1240,11 @@ function renderTabSolicitudes(container){
   container.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", ()=>borrarSolicitud(btn.dataset.del));
   });
-  container.querySelectorAll("[data-boleta]").forEach(btn=>{
-    btn.addEventListener("click", ()=>generarBoletaPDF(btn.dataset.boleta));
+  container.querySelectorAll("[data-imprimir]").forEach(btn=>{
+    btn.addEventListener("click", ()=>imprimirBoletaPDF(btn.dataset.imprimir));
+  });
+  container.querySelectorAll("[data-descargar]").forEach(btn=>{
+    btn.addEventListener("click", ()=>descargarBoletaPDF(btn.dataset.descargar));
   });
   container.querySelectorAll("[data-editreq]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
@@ -1356,11 +1379,7 @@ function dibujarIconoMarca(doc, x, y, size, colorRGB){
   doc.line(x, y+s, x, y+s*0.64);
 }
 
-function generarBoletaPDF(reqId){
-  const req = state.requests.find(r=>r.id===reqId);
-  const emp = state.employees.find(e=>e.nomina===req.nomina);
-  if(!req || !emp){ alert("No se encontró la información necesaria para la boleta."); return; }
-
+function construirBoletaPDF(req, emp){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:"mm", format:"letter" });
   const marginL = 22, marginR = 22;
@@ -1414,6 +1433,24 @@ function generarBoletaPDF(reqId){
   doc.text("Firma de Enterado", marginL+10, y);
   doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-70, y);
 
+  return doc;
+}
+
+function imprimirBoletaPDF(reqId){
+  const req = state.requests.find(r=>r.id===reqId);
+  const emp = state.employees.find(e=>e.nomina===req.nomina);
+  if(!req || !emp){ alert("No se encontró la información necesaria para la boleta."); return; }
+  const doc = construirBoletaPDF(req, emp);
+  doc.autoPrint();
+  const blobUrl = doc.output("bloburl");
+  window.open(blobUrl, "_blank");
+}
+
+function descargarBoletaPDF(reqId){
+  const req = state.requests.find(r=>r.id===reqId);
+  const emp = state.employees.find(e=>e.nomina===req.nomina);
+  if(!req || !emp){ alert("No se encontró la información necesaria para la boleta."); return; }
+  const doc = construirBoletaPDF(req, emp);
   doc.save(`Boleta_${req.nomina}_${req.fechaInicio}.pdf`);
 }
 
