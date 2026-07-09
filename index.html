@@ -776,9 +776,8 @@ function renderEmpleadoShell(){
     const primaPreview = document.getElementById("primaPreview");
     if(primaPreview){
       if(primaCheckbox && primaCheckbox.checked && dias>0){
-        const totalConEsta = b.tomados + dias;
-        const prima = Math.round(totalConEsta * 0.25 * 100)/100;
-        primaPreview.textContent = `Con esta solicitud llevarías ${totalConEsta} días tomados en tu periodo. Tu prima vacacional sería de ${prima} días (25%).`;
+        const prima = Math.round(b.totales * 0.25 * 100)/100;
+        primaPreview.textContent = `Tu prima vacacional sería de ${prima} días (25% de tus ${b.totales} días totales del periodo).`;
       } else {
         primaPreview.textContent = "";
       }
@@ -821,7 +820,7 @@ async function handleNuevaSolicitud(e){
         return;
       }
       solicitaPrima = true;
-      diasPrimaVacacional = Math.round((b.tomados + dias) * 0.25 * 100)/100;
+      diasPrimaVacacional = Math.round(b.totales * 0.25 * 100)/100;
     }
     await addDoc(collection(db,"requests"), {
       nomina: state.user.nomina,
