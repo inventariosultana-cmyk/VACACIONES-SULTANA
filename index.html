@@ -189,6 +189,7 @@
 <body>
 <div id="root"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -605,14 +606,28 @@ function balanceDe(nomina){
   const tieneAjuste = (emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined)
     && emp.diasRestantesInicialesPeriodoInicio === periodo.inicio;
 
-  if(tieneAjuste){
-    const restantes = Math.max(0, emp.diasRestantesIniciales - tomadosPeriodo);
-    const totales = emp.diasRestantesIniciales + tomadosPeriodo;
-    return {antig:periodo.anios, totales, tomados:tomadosPeriodo, restantes, esAdmin:false, ajustado:true};
-  }
+  // "totales" SIEMPRE es el número real del periodo (por antigüedad o manual).
+  // "restantes" depende de si hay ajuste o no. "tomados" se deriva de los otros
+  // dos (totales - restantes) para que los tres números siempre cuadren entre sí.
+  const restantes = tieneAjuste
+    ? Math.max(0, emp.diasRestantesIniciales - tomadosPeriodo)
+    : Math.max(0, totalesCalculados - tomadosPeriodo);
+  const tomados = Math.max(0, totalesCalculados - restantes);
 
-  const restantes = Math.max(0, totalesCalculados - tomadosPeriodo);
-  return {antig:periodo.anios, totales:totalesCalculados, tomados:tomadosPeriodo, restantes, esAdmin:false, ajustado:false};
+  return {antig:periodo.anios, totales:totalesCalculados, tomados, restantes, esAdmin:false, ajustado:tieneAjuste};
+}
+
+// Busca si el empleado ya tiene una solicitud (no rechazada) marcada con
+// prima vacacional dentro de su periodo vigente. Devuelve esa solicitud
+// o null si todavía no la ha pedido este periodo.
+function primaYaSolicitadaEstePeriodo(nomina){
+  const emp = state.employees.find(e=>e.nomina===nomina);
+  if(!emp) return null;
+  const periodo = calcularPeriodoActual(emp.fechaIngreso);
+  return state.requests.find(r=>
+    r.nomina===nomina && r.solicitaPrima && r.estado!=="rechazado" &&
+    r.fechaInicio>=periodo.inicio && r.fechaInicio<=periodo.fin
+  ) || null;
 }
 
 /* ================= Shell compartido (topbar) ================= */
@@ -639,6 +654,7 @@ function renderEmpleadoShell(){
   const misSolicitudes = state.requests
     .filter(r=>r.nomina===state.user.nomina)
     .sort((a,b)=> (b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+  const primaPrevia = primaYaSolicitadaEstePeriodo(state.user.nomina);
 
   root.innerHTML = `
     ${topbarHtml()}
@@ -686,6 +702,17 @@ function renderEmpleadoShell(){
             Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación.
           </p>
           <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+
+          ${primaPrevia ? `
+            <p class="hint">Ya solicitaste tu prima vacacional este periodo (con la solicitud del ${primaPrevia.fechaInicio}). Solo se puede una vez por periodo.</p>
+          ` : `
+            <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
+              <input type="checkbox" id="solicitaPrima" style="width:auto;" />
+              <span style="font-weight:600;font-size:13.5px;color:var(--ink);">También quiero solicitar mi prima vacacional (25%, una vez por periodo)</span>
+            </label>
+            <div id="primaPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+          `}
+
           <label>Comentario (opcional)</label>
           <textarea id="comentario" rows="2" placeholder="Ej. viaje familiar, trámite personal…"></textarea>
           <div id="reqError"></div>
@@ -697,13 +724,14 @@ function renderEmpleadoShell(){
         <h3>Tus solicitudes</h3>
         ${misSolicitudes.length===0 ? `<div class="empty">Aún no has hecho ninguna solicitud.</div>` : `
         <table>
-          <thead><tr><th>Del</th><th>Al</th><th>Días hábiles</th><th>Estatus</th><th>Comentario admin</th></tr></thead>
+          <thead><tr><th>Del</th><th>Al</th><th>Días hábiles</th><th>Prima</th><th>Estatus</th><th>Comentario admin</th></tr></thead>
           <tbody>
             ${misSolicitudes.map(r=>`
               <tr>
                 <td class="num">${r.fechaInicio}</td>
                 <td class="num">${r.fechaFin}</td>
                 <td class="num">${r.diasHabiles}</td>
+                <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
                 <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
                 <td>${r.comentarioAdmin||"—"}</td>
               </tr>
@@ -716,21 +744,34 @@ function renderEmpleadoShell(){
   document.getElementById("reqForm").addEventListener("submit", handleNuevaSolicitud);
   const fiInput = document.getElementById("fi");
   const ffInput = document.getElementById("ff");
+  const primaCheckbox = document.getElementById("solicitaPrima");
   function actualizarPreview(){
     // el fin no puede ser antes que el inicio
     if(fiInput.value) ffInput.min = fiInput.value;
     const preview = document.getElementById("diasPreview");
+    let dias = 0;
     if(fiInput.value && ffInput.value){
-      const dias = diasHabilesEntre(fiInput.value, ffInput.value, fechaNacimientoDe(state.user.nomina));
+      dias = diasHabilesEntre(fiInput.value, ffInput.value, fechaNacimientoDe(state.user.nomina));
       preview.textContent = dias>0
         ? `Esta solicitud equivale a ${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}.`
         : `Revisa las fechas: no hay ningún día hábil en ese rango.`;
     } else {
       preview.textContent = "";
     }
+    const primaPreview = document.getElementById("primaPreview");
+    if(primaPreview){
+      if(primaCheckbox && primaCheckbox.checked && dias>0){
+        const totalConEsta = b.tomados + dias;
+        const prima = Math.round(totalConEsta * 0.25 * 100)/100;
+        primaPreview.textContent = `Con esta solicitud llevarías ${totalConEsta} días tomados en tu periodo. Tu prima vacacional sería de ${prima} días (25%).`;
+      } else {
+        primaPreview.textContent = "";
+      }
+    }
   }
   fiInput.addEventListener("change", actualizarPreview);
   ffInput.addEventListener("change", actualizarPreview);
+  if(primaCheckbox) primaCheckbox.addEventListener("change", actualizarPreview);
 }
 
 async function handleNuevaSolicitud(e){
@@ -757,14 +798,25 @@ async function handleNuevaSolicitud(e){
       errBox.innerHTML = `<div class="error-box">Solo tienes ${b.restantes} día(s) disponibles y estás solicitando ${dias}.</div>`;
       return;
     }
+    const primaCheckbox = document.getElementById("solicitaPrima");
+    let solicitaPrima = false, diasPrimaVacacional = 0;
+    if(primaCheckbox && primaCheckbox.checked){
+      if(primaYaSolicitadaEstePeriodo(state.user.nomina)){
+        errBox.innerHTML = `<div class="error-box">Ya solicitaste tu prima vacacional este periodo; solo se puede una vez.</div>`;
+        return;
+      }
+      solicitaPrima = true;
+      diasPrimaVacacional = Math.round((b.tomados + dias) * 0.25 * 100)/100;
+    }
     await addDoc(collection(db,"requests"), {
       nomina: state.user.nomina,
       nombreEmpleado: state.user.nombre,
       fechaInicio: fi, fechaFin: ff, diasHabiles: dias,
+      solicitaPrima, diasPrimaVacacional,
       estado: "pendiente", comentarioEmpleado: comentario, comentarioAdmin:"",
       fechaSolicitud: serverTimestamp()
     });
-    state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
+    state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}${solicitaPrima? `, + prima vacacional de ${diasPrimaVacacional} días`:""}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
     render();
   }catch(err){
     errBox.innerHTML = `<div class="error-box">No se pudo enviar la solicitud: ${err.message}</div>`;
@@ -1029,7 +1081,7 @@ function renderTabSolicitudes(container){
       <h3>Pendientes de aprobación (${pendientes.length})</h3>
       ${pendientes.length===0? `<div class="empty">No hay solicitudes pendientes.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Comentario</th><th></th></tr></thead>
+        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Comentario</th><th></th></tr></thead>
         <tbody>
         ${pendientes.map(r=>`
           <tr>
@@ -1039,6 +1091,7 @@ function renderTabSolicitudes(container){
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
             <td class="num">${r.diasHabiles}</td>
+            <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
             <td>${r.comentarioEmpleado||"—"}</td>
             <td class="row-actions">
               <button class="btn-success btn-small" data-approve="${r.id}">Aprobar</button>
@@ -1057,7 +1110,7 @@ function renderTabSolicitudes(container){
       </div>
       ${resueltas.length===0? `<div class="empty">Todavía no hay solicitudes resueltas.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Estatus</th><th></th></tr></thead>
+        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Estatus</th><th></th></tr></thead>
         <tbody>
         ${resueltas.map(r=>`
           <tr>
@@ -1067,8 +1120,10 @@ function renderTabSolicitudes(container){
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
             <td class="num">${r.diasHabiles}</td>
+            <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
             <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
             <td class="row-actions">
+              ${r.estado==="aprobado"? `<button class="btn-ghost btn-small" data-boleta="${r.id}">Boleta PDF</button>`:""}
               <button class="btn-ghost btn-small" data-editreq="${r.id}">Editar</button>
               <button class="btn-ghost btn-small" data-del="${r.id}">Borrar</button>
             </td>
@@ -1086,6 +1141,9 @@ function renderTabSolicitudes(container){
   });
   container.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", ()=>borrarSolicitud(btn.dataset.del));
+  });
+  container.querySelectorAll("[data-boleta]").forEach(btn=>{
+    btn.addEventListener("click", ()=>generarBoletaPDF(btn.dataset.boleta));
   });
   container.querySelectorAll("[data-editreq]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
@@ -1198,6 +1256,63 @@ async function resolverSolicitud(id, estado){
     }
   }
   await updateDoc(doc(db,"requests",id), {estado, comentarioAdmin});
+}
+
+/* ================= Boleta de vacaciones en PDF ================= */
+function generarBoletaPDF(reqId){
+  const req = state.requests.find(r=>r.id===reqId);
+  const emp = state.employees.find(e=>e.nomina===req.nomina);
+  if(!req || !emp){ alert("No se encontró la información necesaria para la boleta."); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"mm", format:"letter" });
+  const marginL = 22, marginR = 22;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const usableWidth = pageWidth - marginL - marginR;
+  let y = 22;
+
+  const hoy = new Date();
+  const hoyStr = `${pad2(hoy.getDate())}/${pad2(hoy.getMonth()+1)}/${hoy.getFullYear()}`;
+  const fi = new Date(req.fechaInicio+"T00:00:00");
+  const ff = new Date(req.fechaFin+"T00:00:00");
+  const periodo = calcularPeriodoActual(emp.fechaIngreso);
+  const inicioPeriodo = new Date(periodo.inicio+"T00:00:00");
+  const finPeriodo = new Date(periodo.fin+"T00:00:00");
+  const b = balanceDe(req.nomina);
+  const primaEste = req.solicitaPrima ? req.diasPrimaVacacional : 0;
+  const primaTotalPeriodo = Math.round(0.25 * (b.totales||0) * 100)/100;
+  const primaPendiente = req.solicitaPrima ? 0 : primaTotalPeriodo;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(15);
+  doc.text("BOLETA DE VACACIONES", marginL, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10.5);
+  doc.text(`Fecha: ${hoyStr}`, pageWidth-marginR, y, {align:"right"});
+  y += 13;
+
+  doc.text("Departamento de Personal:", marginL, y); y += 7;
+  doc.text("Presente:", marginL, y); y += 11;
+
+  const parrafo1 = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} de ${ff.getFullYear()}, el Sr./Sra. ${req.nombreEmpleado}`;
+  let lineas = doc.splitTextToSize(parrafo1, usableWidth);
+  doc.text(lineas, marginL, y); y += lineas.length*6 + 6;
+
+  const ordinal = periodo.anios+1;
+  const parrafo2 = `No. ${req.nomina} del Departamento de ${categoriaDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinal}\u00b0 año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
+  lineas = doc.splitTextToSize(parrafo2, usableWidth);
+  doc.text(lineas, marginL, y); y += lineas.length*6 + 10;
+
+  doc.text(`Disfrutará: ${req.diasHabiles} días de Vacaciones, y ${primaEste} días de Prima de Vacaciones`, marginL, y); y += 9;
+  doc.text(`Pendiente: ${b.restantes} días de Vacaciones, y ${primaPendiente} días de Prima de Vacaciones`, marginL, y); y += 32;
+
+  doc.setDrawColor(60,60,60);
+  doc.line(marginL, y, marginL+70, y);
+  doc.line(pageWidth-marginR-70, y, pageWidth-marginR, y);
+  y += 5;
+  doc.setFontSize(9);
+  doc.text("Firma del empleado", marginL+8, y);
+  doc.text("Firma de Recursos Humanos", pageWidth-marginR-70, y);
+
+  doc.save(`Boleta_${req.nomina}_${req.fechaInicio}.pdf`);
 }
 
 function construirCalendarioMes(year, month){
@@ -1387,15 +1502,13 @@ function renderTabReportes(container){
           if(b.esAdmin){
             return `<tr><td class="num">${emp.nomina}</td><td>${emp.nombre}</td><td>${emp.categoria||"—"}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>`;
           }
-          const totalPorAntiguedad = (emp.diasManual!==null && emp.diasManual!==undefined) ? emp.diasManual : diasPorAntiguedad(b.antig);
-          const tomadosCalc = Math.max(0, totalPorAntiguedad - b.restantes);
           return `<tr>
             <td class="num">${emp.nomina}</td>
             <td>${emp.nombre}</td>
             <td>${emp.categoria||"—"}</td>
             <td class="num">${b.antig}a</td>
-            <td class="num">${totalPorAntiguedad}</td>
-            <td class="num">${tomadosCalc}${b.ajustado?" ⚙":""}</td>
+            <td class="num">${b.totales}</td>
+            <td class="num">${b.tomados}${b.ajustado?" ⚙":""}</td>
             <td class="num">${b.restantes}</td>
           </tr>`;
         }).join("")}
