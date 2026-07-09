@@ -684,6 +684,16 @@ function primaYaSolicitadaEstePeriodo(nomina){
   ) || null;
 }
 
+const DIAS_MINIMOS_PARA_PRIMA = 6;
+// Regla: para poder solicitar la prima vacacional, el empleado debe haber
+// disfrutado (aprobado) al menos una vez, en cualquier periodo, una sola
+// solicitud de 6 días completos de vacaciones o más.
+function elegibleParaPrima(nomina){
+  return state.requests.some(r=>
+    r.nomina===nomina && r.estado==="aprobado" && r.diasHabiles>=DIAS_MINIMOS_PARA_PRIMA
+  );
+}
+
 /* ================= Shell compartido (topbar) ================= */
 function topbarHtml(){
   return `
@@ -709,6 +719,7 @@ function renderEmpleadoShell(){
     .filter(r=>r.nomina===state.user.nomina)
     .sort((a,b)=> (b.fechaInicio||"").localeCompare(a.fechaInicio||""));
   const primaPrevia = primaYaSolicitadaEstePeriodo(state.user.nomina);
+  const primaElegible = elegibleParaPrima(state.user.nomina);
   const empActual = state.employees.find(e=>e.nomina===state.user.nomina);
   const ventana = empActual ? ventanaAdelanto(empActual.fechaIngreso) : {enVentana:false};
   const adelantoDisponible = ventana.enVentana
@@ -768,6 +779,8 @@ function renderEmpleadoShell(){
 
           ${primaPrevia ? `
             <p class="hint">${primaPrevia.manual ? "Tu prima vacacional de este periodo ya fue marcada como pagada por RH." : `Ya solicitaste tu prima vacacional este periodo (con la solicitud del ${primaPrevia.fechaInicio}).`} Solo se puede una vez por periodo.</p>
+          ` : !primaElegible ? `
+            <p class="hint">Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud.</p>
           ` : `
             <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
               <input type="checkbox" id="solicitaPrima" style="width:auto;" />
@@ -879,6 +892,10 @@ async function handleNuevaSolicitud(e){
     if(primaCheckbox && primaCheckbox.checked){
       if(primaYaSolicitadaEstePeriodo(state.user.nomina)){
         errBox.innerHTML = `<div class="error-box">Ya solicitaste tu prima vacacional este periodo; solo se puede una vez.</div>`;
+        return;
+      }
+      if(!elegibleParaPrima(state.user.nomina)){
+        errBox.innerHTML = `<div class="error-box">Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud.</div>`;
         return;
       }
       solicitaPrima = true;
@@ -1459,15 +1476,15 @@ function escribirSegmentos(doc, x, y, segments, tamano){
 
 function construirBoletaPDF(req, emp){
   const { jsPDF } = window.jspdf;
-  // Media carta (5.5 x 8.5 in), tamaño estándar de la boleta física
-  const doc = new jsPDF({ unit:"mm", format:[139.7, 215.9] });
-  const marginL = 11, marginR = 11;
+  // Media carta horizontal (8.5 x 5.5 in), tamaño estándar de la boleta física
+  const doc = new jsPDF({ unit:"mm", format:[215.9, 139.7] });
+  const marginL = 12, marginR = 12;
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 15;
+  let y = 13;
   const C = COLOR_BOLETA;
   doc.setTextColor(C[0],C[1],C[2]);
   doc.setDrawColor(C[0],C[1],C[2]);
-  const F = 8.5; // tamaño de letra del cuerpo, ajustado para que quepa en media carta
+  const F = 10; // tamaño de letra del cuerpo
 
   const hoy = new Date();
   const fi = new Date(req.fechaInicio+"T00:00:00");
@@ -1486,70 +1503,57 @@ function construirBoletaPDF(req, emp){
   const servicioFin = new Date(fechaAniversario(emp.fechaIngreso, ordinal)+"T00:00:00");
 
   // Encabezado: título a la izquierda, logo "sultana" (con el cuadro a la derecha)
-  doc.setFont("helvetica","bold"); doc.setFontSize(12);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
   doc.text("BOLETA DE VACACIONES", marginL, y);
-  doc.setFontSize(10.5);
+  doc.setFontSize(11.5);
   const textoMarcaAncho = doc.getTextWidth("sultana");
-  const iconSize = 5.5, gapMarca = 1;
+  const iconSize = 6, gapMarca = 1;
   const marcaX = pageWidth - marginR - (textoMarcaAncho + gapMarca + iconSize);
   doc.text("sultana", marcaX, y-0.5);
-  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-5, iconSize, C);
+  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-5.5, iconSize, C);
   y += 9;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"Santa Catarina, N.L. a "},
+    {text:"Santa Catarina, N.L. a"},
     {blank: hoy.getDate(), minWidth:8},
-    {text:" de "},
+    {text:"de"},
     {blank: MESES[hoy.getMonth()], minWidth:18},
-    {text:" de "},
+    {text:"de"},
     {blank: hoy.getFullYear(), minWidth:14},
   ], F);
-  y += 9;
+  y += 8;
 
   doc.setFont("helvetica","normal"); doc.setFontSize(F);
   doc.text("Departamento de Personal:", marginL, y); y += 6;
   doc.text("Presente:", marginL, y); y += 8;
 
-  // Cuerpo: líneas cortas para que quepan en el ancho de media carta
+  // Cuerpo: líneas consolidadas, aprovechando el ancho de la orientación horizontal
   escribirSegmentos(doc, marginL, y, [
-    {text:"Hacemos de su conocimiento que del día"},
-    {blank: fi.getDate(), minWidth:8},
-  ], F); y += 6.5;
-
-  escribirSegmentos(doc, marginL, y, [
+    {text:"Hacemos de su conocimiento que del día"}, {blank: fi.getDate(), minWidth:8},
     {text:"de"}, {blank: MESES[fi.getMonth()], minWidth:18},
     {text:"al día"}, {blank: ff.getDate(), minWidth:8},
-  ], F); y += 6.5;
-
-  escribirSegmentos(doc, marginL, y, [
     {text:"de"}, {blank: MESES[ff.getMonth()], minWidth:18},
-    {text:"de"}, {blank: ff.getFullYear(), minWidth:14},
-  ], F); y += 6.5;
+  ], F); y += 7;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"el Sr./Sra."}, {blank: req.nombreEmpleado, minWidth:55},
-  ], F); y += 6.5;
+    {text:"de"}, {blank: ff.getFullYear(), minWidth:14},
+    {text:"el Sr./Sra."}, {blank: req.nombreEmpleado, minWidth:60},
+  ], F); y += 7;
 
   escribirSegmentos(doc, marginL, y, [
     {text:"No."}, {blank: req.nomina, minWidth:14},
-    {text:"del Departamento de"}, {blank: departamentoDe(req.nomina)||"—", minWidth:28},
-  ], F); y += 6.5;
-
-  doc.setFont("helvetica","normal"); doc.setFontSize(F);
-  doc.text(", disfrutará de sus vacaciones", marginL, y); y += 6.5;
+    {text:"del Departamento de"}, {blank: departamentoDe(req.nomina)||"—", minWidth:35},
+    {text:", disfrutará de sus"},
+  ], F); y += 7;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"correspondientes al"}, {blank: `${ordinalTexto(ordinal)} año`, minWidth:24},
-  ], F); y += 6.5;
-
-  doc.text("de sus servicios prestados y que comprende", marginL, y); y += 6.5;
+    {text:"vacaciones correspondientes al"}, {blank: `${ordinalTexto(ordinal)} año`, minWidth:26},
+    {text:"de sus servicios prestados y que"},
+  ], F); y += 7;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"del mes de"}, {blank: MESES[servicioInicio.getMonth()], minWidth:18},
+    {text:"comprende del mes de"}, {blank: MESES[servicioInicio.getMonth()], minWidth:18},
     {text:"de"}, {blank: servicioInicio.getFullYear(), minWidth:14},
-  ], F); y += 6.5;
-
-  escribirSegmentos(doc, marginL, y, [
     {text:"al mes de"}, {blank: MESES[servicioFin.getMonth()], minWidth:18},
     {text:"de"}, {blank: servicioFin.getFullYear(), minWidth:14},
   ], F); y += 10;
@@ -1557,24 +1561,22 @@ function construirBoletaPDF(req, emp){
   escribirSegmentos(doc, marginL, y, [
     {text:"Disfrutará:"}, {blank: req.diasHabiles, minWidth:10},
     {text:"días de Vacaciones, y"}, {blank: primaEste, minWidth:10},
-    {text:"días de"},
-  ], F); y += 6.5;
-  doc.text("Prima de Vacaciones", marginL, y); y += 8;
+    {text:"días de Prima de Vacaciones"},
+  ], F); y += 8;
 
   escribirSegmentos(doc, marginL, y, [
     {text:"Pendiente:"}, {blank: b.restantes, minWidth:10},
     {text:"días de Vacaciones, y"}, {blank: primaPendiente, minWidth:10},
-    {text:"días de"},
-  ], F); y += 6.5;
-  doc.text("Prima de Vacaciones", marginL, y); y += 18;
+    {text:"días de Prima de Vacaciones"},
+  ], F); y += 16;
 
   doc.setLineWidth(0.3);
-  doc.line(marginL, y, marginL+50, y);
-  doc.line(pageWidth-marginR-50, y, pageWidth-marginR, y);
+  doc.line(marginL, y, marginL+55, y);
+  doc.line(pageWidth-marginR-55, y, pageWidth-marginR, y);
   y += 4.5;
-  doc.setFont("helvetica","normal"); doc.setFontSize(8);
-  doc.text("Firma de Enterado", marginL+3, y);
-  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-50, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9);
+  doc.text("Firma de Enterado", marginL+5, y);
+  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-55, y);
 
   return doc;
 }
