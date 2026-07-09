@@ -1477,7 +1477,7 @@ function escribirSegmentos(doc, x, y, segments, tamano){
 function construirBoletaPDF(req, emp){
   const { jsPDF } = window.jspdf;
   // Media carta horizontal (8.5 x 5.5 in), tamaño estándar de la boleta física
-  const doc = new jsPDF({ unit:"mm", format:[215.9, 139.7] });
+  const doc = new jsPDF({ unit:"mm", format:[215.9, 139.7], orientation:"landscape" });
   const marginL = 12, marginR = 12;
   const pageWidth = doc.internal.pageSize.getWidth();
   let y = 13;
