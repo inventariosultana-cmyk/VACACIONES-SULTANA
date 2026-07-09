@@ -1443,7 +1443,7 @@ function escribirSegmentos(doc, x, y, segments, tamano){
     doc.setFontSize(tamano);
     if(seg.text !== undefined){
       doc.text(seg.text, curX, y);
-      curX += doc.getTextWidth(seg.text);
+      curX += doc.getTextWidth(seg.text) + 1.3;
     } else if(seg.blank !== undefined){
       const val = String(seg.blank);
       const valWidth = doc.getTextWidth(val);
@@ -1451,7 +1451,7 @@ function escribirSegmentos(doc, x, y, segments, tamano){
       doc.text(val, curX + (lineWidth-valWidth)/2, y-0.8);
       doc.setLineWidth(0.25);
       doc.line(curX, y+1, curX+lineWidth, y+1);
-      curX += lineWidth + 1.5;
+      curX += lineWidth + 1.8;
     }
   });
   return curX;
@@ -1459,126 +1459,122 @@ function escribirSegmentos(doc, x, y, segments, tamano){
 
 function construirBoletaPDF(req, emp){
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit:"mm", format:"letter" });
-  const marginL = 20, marginR = 20;
+  // Media carta (5.5 x 8.5 in), tamaño estándar de la boleta física
+  const doc = new jsPDF({ unit:"mm", format:[139.7, 215.9] });
+  const marginL = 11, marginR = 11;
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 20;
+  let y = 15;
   const C = COLOR_BOLETA;
   doc.setTextColor(C[0],C[1],C[2]);
   doc.setDrawColor(C[0],C[1],C[2]);
+  const F = 8.5; // tamaño de letra del cuerpo, ajustado para que quepa en media carta
 
   const hoy = new Date();
   const fi = new Date(req.fechaInicio+"T00:00:00");
   const ff = new Date(req.fechaFin+"T00:00:00");
   const periodo = calcularPeriodoActual(emp.fechaIngreso);
-  const inicioPeriodo = new Date(periodo.inicio+"T00:00:00");
-  const finPeriodo = new Date(periodo.fin+"T00:00:00");
   const b = balanceDe(req.nomina);
   const primaEste = req.solicitaPrima ? req.diasPrimaVacacional : 0;
   const primaTotalPeriodo = Math.round(0.25 * (b.totales||0) * 100)/100;
   const primaPendiente = req.solicitaPrima ? 0 : primaTotalPeriodo;
   const ordinal = periodo.anios;
 
-  // Encabezado: título a la izquierda, logo "sultana" (con el cuadro a la derecha)
-  doc.setFont("helvetica","bold"); doc.setFontSize(16);
-  doc.text("BOLETA DE VACACIONES", marginL, y);
-  doc.setFontSize(14);
-  const textoMarcaAncho = doc.getTextWidth("sultana");
-  const iconSize = 7, gapMarca = 1;
-  const marcaX = pageWidth - marginR - (textoMarcaAncho + gapMarca + iconSize);
-  doc.text("sultana", marcaX, y-1);
-  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-6.5, iconSize, C);
-  y += 15;
+  // El "año de servicio" que corresponde es el que YA se cumplió (ej. si
+  // ingresó en 2025 y hoy cumple 1 año, debe decir "primer año... que
+  // comprende del 2025 al 2026"), no el periodo que apenas comienza.
+  const servicioInicio = new Date(fechaAniversario(emp.fechaIngreso, ordinal-1)+"T00:00:00");
+  const servicioFin = new Date(fechaAniversario(emp.fechaIngreso, ordinal)+"T00:00:00");
 
-  // Fecha
+  // Encabezado: título a la izquierda, logo "sultana" (con el cuadro a la derecha)
+  doc.setFont("helvetica","bold"); doc.setFontSize(12);
+  doc.text("BOLETA DE VACACIONES", marginL, y);
+  doc.setFontSize(10.5);
+  const textoMarcaAncho = doc.getTextWidth("sultana");
+  const iconSize = 5.5, gapMarca = 1;
+  const marcaX = pageWidth - marginR - (textoMarcaAncho + gapMarca + iconSize);
+  doc.text("sultana", marcaX, y-0.5);
+  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-5, iconSize, C);
+  y += 9;
+
   escribirSegmentos(doc, marginL, y, [
     {text:"Santa Catarina, N.L. a "},
-    {blank: hoy.getDate(), minWidth:10},
+    {blank: hoy.getDate(), minWidth:8},
     {text:" de "},
-    {blank: MESES[hoy.getMonth()], minWidth:22},
+    {blank: MESES[hoy.getMonth()], minWidth:18},
     {text:" de "},
-    {blank: hoy.getFullYear(), minWidth:16},
-  ], 11);
-  y += 13;
+    {blank: hoy.getFullYear(), minWidth:14},
+  ], F);
+  y += 9;
 
-  doc.setFont("helvetica","normal"); doc.setFontSize(11);
-  doc.text("Departamento de Personal:", marginL, y); y += 8;
-  doc.text("Presente:", marginL, y); y += 12;
+  doc.setFont("helvetica","normal"); doc.setFontSize(F);
+  doc.text("Departamento de Personal:", marginL, y); y += 6;
+  doc.text("Presente:", marginL, y); y += 8;
 
-  // Cuerpo: mismas líneas y espacios que la boleta física
+  // Cuerpo: líneas cortas para que quepan en el ancho de media carta
   escribirSegmentos(doc, marginL, y, [
-    {text:"Hacemos de su conocimiento que del día "},
-    {blank: fi.getDate(), minWidth:10},
-    {text:" de "},
-    {blank: MESES[fi.getMonth()], minWidth:22},
-    {text:" al día "},
-    {blank: ff.getDate(), minWidth:10},
-    {text:" de "},
-  ], 11);
-  y += 11;
+    {text:"Hacemos de su conocimiento que del día"},
+    {blank: fi.getDate(), minWidth:8},
+  ], F); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {blank: MESES[ff.getMonth()], minWidth:22},
-    {text:" de "},
-    {blank: ff.getFullYear(), minWidth:16},
-    {text:" el Sr./Sra. "},
-    {blank: req.nombreEmpleado, minWidth:60},
-  ], 11);
-  y += 11;
+    {text:"de"}, {blank: MESES[fi.getMonth()], minWidth:18},
+    {text:"al día"}, {blank: ff.getDate(), minWidth:8},
+  ], F); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"No. "},
-    {blank: req.nomina, minWidth:18},
-    {text:" del Departamento de "},
-    {blank: departamentoDe(req.nomina)||"—", minWidth:40},
-    {text:", disfrutará de sus"},
-  ], 11);
-  y += 11;
+    {text:"de"}, {blank: MESES[ff.getMonth()], minWidth:18},
+    {text:"de"}, {blank: ff.getFullYear(), minWidth:14},
+  ], F); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"vacaciones correspondientes al "},
-    {blank: `${ordinalTexto(ordinal)} año`, minWidth:26},
-    {text:" de sus servicios prestados y que"},
-  ], 11);
-  y += 11;
+    {text:"el Sr./Sra."}, {blank: req.nombreEmpleado, minWidth:55},
+  ], F); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"comprende del mes de "},
-    {blank: MESES[inicioPeriodo.getMonth()], minWidth:22},
-    {text:" de "},
-    {blank: inicioPeriodo.getFullYear(), minWidth:16},
-    {text:" al mes de "},
-    {blank: MESES[finPeriodo.getMonth()], minWidth:22},
-    {text:" de "},
-    {blank: finPeriodo.getFullYear(), minWidth:16},
-  ], 11);
-  y += 15;
+    {text:"No."}, {blank: req.nomina, minWidth:14},
+    {text:"del Departamento de"}, {blank: departamentoDe(req.nomina)||"—", minWidth:28},
+  ], F); y += 6.5;
+
+  doc.setFont("helvetica","normal"); doc.setFontSize(F);
+  doc.text(", disfrutará de sus vacaciones", marginL, y); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"Disfrutará: "},
-    {blank: req.diasHabiles, minWidth:12},
-    {text:" días de Vacaciones, y "},
-    {blank: primaEste, minWidth:12},
-    {text:" días de Prima de Vacaciones"},
-  ], 11);
-  y += 12;
+    {text:"correspondientes al"}, {blank: `${ordinalTexto(ordinal)} año`, minWidth:24},
+  ], F); y += 6.5;
+
+  doc.text("de sus servicios prestados y que comprende", marginL, y); y += 6.5;
 
   escribirSegmentos(doc, marginL, y, [
-    {text:"Pendiente: "},
-    {blank: b.restantes, minWidth:12},
-    {text:" días de Vacaciones, y "},
-    {blank: primaPendiente, minWidth:12},
-    {text:" días de Prima de Vacaciones"},
-  ], 11);
-  y += 28;
+    {text:"del mes de"}, {blank: MESES[servicioInicio.getMonth()], minWidth:18},
+    {text:"de"}, {blank: servicioInicio.getFullYear(), minWidth:14},
+  ], F); y += 6.5;
+
+  escribirSegmentos(doc, marginL, y, [
+    {text:"al mes de"}, {blank: MESES[servicioFin.getMonth()], minWidth:18},
+    {text:"de"}, {blank: servicioFin.getFullYear(), minWidth:14},
+  ], F); y += 10;
+
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Disfrutará:"}, {blank: req.diasHabiles, minWidth:10},
+    {text:"días de Vacaciones, y"}, {blank: primaEste, minWidth:10},
+    {text:"días de"},
+  ], F); y += 6.5;
+  doc.text("Prima de Vacaciones", marginL, y); y += 8;
+
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Pendiente:"}, {blank: b.restantes, minWidth:10},
+    {text:"días de Vacaciones, y"}, {blank: primaPendiente, minWidth:10},
+    {text:"días de"},
+  ], F); y += 6.5;
+  doc.text("Prima de Vacaciones", marginL, y); y += 18;
 
   doc.setLineWidth(0.3);
-  doc.line(marginL, y, marginL+65, y);
-  doc.line(pageWidth-marginR-65, y, pageWidth-marginR, y);
-  y += 5;
-  doc.setFont("helvetica","normal"); doc.setFontSize(10);
-  doc.text("Firma de Enterado", marginL+8, y);
-  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-65, y);
+  doc.line(marginL, y, marginL+50, y);
+  doc.line(pageWidth-marginR-50, y, pageWidth-marginR, y);
+  y += 4.5;
+  doc.setFont("helvetica","normal"); doc.setFontSize(8);
+  doc.text("Firma de Enterado", marginL+3, y);
+  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-50, y);
 
   return doc;
 }
