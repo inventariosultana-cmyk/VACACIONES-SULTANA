@@ -315,6 +315,14 @@ const CATEGORIAS_DEFAULT = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado
 function categoriasDisponibles(){
   return (state.categorias && state.categorias.length>0) ? state.categorias : CATEGORIAS_DEFAULT;
 }
+const DEPARTAMENTOS_DEFAULT = ["DLSLP","Almacén DLSLP","Armado DLSP"];
+function departamentosDisponibles(){
+  return (state.departamentos && state.departamentos.length>0) ? state.departamentos : DEPARTAMENTOS_DEFAULT;
+}
+function departamentoDe(nomina){
+  const emp = state.employees.find(e=>e.nomina===nomina);
+  return emp && emp.departamento ? emp.departamento : "";
+}
 function fechaAniversario(fechaIngresoStr, n){
   const d = new Date(fechaIngresoStr+"T00:00:00");
   d.setFullYear(d.getFullYear()+n);
@@ -349,12 +357,14 @@ let state = {
   employees: [],
   requests: [],
   categorias: null,
+  departamentos: null,
   view: "empleados",
   loginError: "",
   loading: false,
   unsubEmployees: null,
   unsubRequests: null,
   unsubCategorias: null,
+  unsubDepartamentos: null,
 };
 
 const root = document.getElementById("root");
@@ -577,12 +587,17 @@ function attachListeners(){
     state.categorias = snap.exists() ? (snap.data().lista||[]) : null;
     render();
   });
+  state.unsubDepartamentos = onSnapshot(doc(db,"meta","departamentos"), (snap)=>{
+    state.departamentos = snap.exists() ? (snap.data().lista||[]) : null;
+    render();
+  });
 }
 function detachListeners(){
   if(state.unsubEmployees) state.unsubEmployees();
   if(state.unsubRequests) state.unsubRequests();
   if(state.unsubCategorias) state.unsubCategorias();
-  state.unsubEmployees=null; state.unsubRequests=null; state.unsubCategorias=null;
+  if(state.unsubDepartamentos) state.unsubDepartamentos();
+  state.unsubEmployees=null; state.unsubRequests=null; state.unsubCategorias=null; state.unsubDepartamentos=null;
 }
 
 /* ================= Cálculo de balance de un empleado ================= */
@@ -853,14 +868,16 @@ function renderTabEmpleados(container){
         <h3 style="margin:0;">Empleados (${empleados.length})</h3>
         <div style="display:flex;gap:8px;">
           <button class="btn-ghost btn-small" id="manageCatBtn">Gestionar categorías</button>
+          <button class="btn-ghost btn-small" id="manageDeptBtn">Gestionar departamentos</button>
           <button class="btn-primary" style="width:auto;margin:0;" id="newEmpBtn">+ Nuevo empleado</button>
         </div>
       </div>
       <div id="catFormWrap"></div>
+      <div id="deptFormWrap"></div>
       <div id="empFormWrap"></div>
       ${empleados.length===0? `<div class="empty">Aún no hay empleados registrados.</div>` : `
       <table>
-        <thead><tr><th>Nómina</th><th>Nombre</th><th>Ingreso</th><th>Antigüedad</th><th>Días/año</th><th>Restantes</th><th>Categoría</th><th>Rol</th><th></th></tr></thead>
+        <thead><tr><th>Nómina</th><th>Nombre</th><th>Ingreso</th><th>Antigüedad</th><th>Días/año</th><th>Restantes</th><th>Categoría</th><th>Departamento</th><th>Rol</th><th></th></tr></thead>
         <tbody>
         ${empleados.map(emp=>{
           const b = balanceDe(emp.nomina);
@@ -872,6 +889,7 @@ function renderTabEmpleados(container){
             <td class="num">${b.esAdmin? "—" : b.totales+(emp.diasManual!==null && emp.diasManual!==undefined?" *":"")}</td>
             <td class="num">${b.esAdmin? "—" : b.restantes+(b.ajustado?" ⚙":"")}</td>
             <td>${emp.categoria? `<span class="cat-chip"><span class="cat-dot" style="background:${colorCategoria(emp.categoria)}"></span>${emp.categoria}</span>` : "—"}</td>
+            <td>${emp.departamento||"—"}</td>
             <td>${emp.isAdmin?"Admin":"Empleado"}</td>
             <td class="row-actions">
               <button class="btn-ghost btn-small" data-edit="${emp.nomina}">Editar</button>
@@ -886,6 +904,7 @@ function renderTabEmpleados(container){
     </div>`;
   document.getElementById("newEmpBtn").addEventListener("click", ()=>renderEmpForm(null));
   document.getElementById("manageCatBtn").addEventListener("click", ()=>renderCatForm());
+  document.getElementById("manageDeptBtn").addEventListener("click", ()=>renderDeptForm());
   container.querySelectorAll("[data-edit]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const emp = state.employees.find(e=>e.nomina===btn.dataset.edit);
@@ -953,6 +972,58 @@ function renderCatForm(){
   });
 }
 
+function renderDeptForm(){
+  const wrap = document.getElementById("deptFormWrap");
+  const lista = departamentosDisponibles();
+  wrap.innerHTML = `
+    <div class="card" style="background:var(--accent-soft);border:none;margin-bottom:20px;">
+      <h3>Departamentos</h3>
+      <p class="hint">Son distintos de las categorías: este es el dato que aparece en la boleta de vacaciones de cada empleado. Puedes agregar, quitar o renombrar según lo que necesite tu empresa.</p>
+      <div id="deptList" style="margin:14px 0;">
+        ${lista.length===0? `<div class="empty">No hay departamentos todavía.</div>` : lista.map(d=>`
+          <div class="cal-legend-item">
+            <span>${d}</span>
+            <button class="btn-ghost btn-small" data-deldept="${d}">Quitar</button>
+          </div>`).join("")}
+      </div>
+      <div class="field-row">
+        <div>
+          <label>Nuevo departamento</label>
+          <input id="deptNuevo" placeholder="Ej. Mantenimiento DLSLP" />
+        </div>
+      </div>
+      <div id="deptFormError"></div>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn-primary" style="width:auto;margin:0;" id="deptAddBtn">Agregar</button>
+        <button class="btn-ghost" id="deptCloseBtn">Cerrar</button>
+      </div>
+    </div>`;
+  document.getElementById("deptCloseBtn").addEventListener("click", ()=>{wrap.innerHTML="";});
+  document.getElementById("deptAddBtn").addEventListener("click", async ()=>{
+    const input = document.getElementById("deptNuevo");
+    const nuevo = input.value.trim();
+    const errBox = document.getElementById("deptFormError");
+    if(!nuevo) return;
+    const actual = departamentosDisponibles();
+    if(actual.includes(nuevo)){
+      errBox.innerHTML = `<div class="error-box">Ese departamento ya existe.</div>`;
+      return;
+    }
+    await setDoc(doc(db,"meta","departamentos"), {lista:[...actual, nuevo]});
+    renderDeptForm();
+  });
+  wrap.querySelectorAll("[data-deldept]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const dept = btn.dataset.deldept;
+      const enUso = state.employees.filter(e=>e.departamento===dept).length;
+      if(enUso>0 && !confirm(`${enUso} empleado(s) tienen asignado el departamento "${dept}". Si lo quitas, ellos lo conservan en su ficha pero ya no podrás elegirlo para nuevos empleados. ¿Continuar?`)) return;
+      const actual = departamentosDisponibles().filter(d=>d!==dept);
+      await setDoc(doc(db,"meta","departamentos"), {lista:actual});
+      renderDeptForm();
+    });
+  });
+}
+
 function renderEmpForm(emp){
   const wrap = document.getElementById("empFormWrap");
   const esNuevo = !emp;
@@ -1000,6 +1071,13 @@ function renderEmpForm(emp){
         </select>
         <p class="hint">Se usa para colorear el calendario y avisar si dos personas de la misma categoría piden las mismas fechas.</p>
 
+        <label>Departamento</label>
+        <select id="f_departamento" required>
+          <option value="" ${emp?.departamento? "" : "selected"} disabled>Selecciona un departamento…</option>
+          ${departamentosDisponibles().map(d=>`<option value="${d}" ${emp?.departamento===d?"selected":""}>${d}</option>`).join("")}
+        </select>
+        <p class="hint">Es distinto de la categoría; este es el que aparece en la boleta de vacaciones.</p>
+
         <label>Días restantes en su periodo actual (opcional)</label>
         <input type="number" min="0" id="f_restantes" value="${emp?.diasRestantesIniciales ?? ""}" placeholder="Dejar vacío = sin ajuste manual" />
         <p class="hint" id="periodoHint"></p>
@@ -1043,6 +1121,7 @@ function renderEmpForm(emp){
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
     const categoria = document.getElementById("f_categoria").value;
+    const departamento = document.getElementById("f_departamento").value;
     const restantesRaw = document.getElementById("f_restantes").value;
     let diasRestantesIniciales = null, diasRestantesInicialesPeriodoInicio = null;
     if(restantesRaw !== ""){
@@ -1058,9 +1137,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -1259,6 +1338,25 @@ async function resolverSolicitud(id, estado){
 }
 
 /* ================= Boleta de vacaciones en PDF ================= */
+function dibujarIconoMarca(doc, x, y, size, colorRGB){
+  const s = size;
+  doc.setLineWidth(s*0.16);
+  doc.setDrawColor(colorRGB[0], colorRGB[1], colorRGB[2]);
+  doc.setLineCap("square");
+  // esquina superior izquierda
+  doc.line(x, y+s*0.36, x, y);
+  doc.line(x, y, x+s*0.36, y);
+  // esquina superior derecha
+  doc.line(x+s*0.64, y, x+s, y);
+  doc.line(x+s, y, x+s, y+s*0.36);
+  // esquina inferior derecha
+  doc.line(x+s, y+s*0.64, x+s, y+s);
+  doc.line(x+s, y+s, x+s*0.64, y+s);
+  // esquina inferior izquierda
+  doc.line(x+s*0.36, y+s, x, y+s);
+  doc.line(x, y+s, x, y+s*0.64);
+}
+
 function generarBoletaPDF(reqId){
   const req = state.requests.find(r=>r.id===reqId);
   const emp = state.employees.find(e=>e.nomina===req.nomina);
@@ -1269,10 +1367,9 @@ function generarBoletaPDF(reqId){
   const marginL = 22, marginR = 22;
   const pageWidth = doc.internal.pageSize.getWidth();
   const usableWidth = pageWidth - marginL - marginR;
-  let y = 22;
+  let y = 20;
 
   const hoy = new Date();
-  const hoyStr = `${pad2(hoy.getDate())}/${pad2(hoy.getMonth()+1)}/${hoy.getFullYear()}`;
   const fi = new Date(req.fechaInicio+"T00:00:00");
   const ff = new Date(req.fechaFin+"T00:00:00");
   const periodo = calcularPeriodoActual(emp.fechaIngreso);
@@ -1282,35 +1379,41 @@ function generarBoletaPDF(reqId){
   const primaEste = req.solicitaPrima ? req.diasPrimaVacacional : 0;
   const primaTotalPeriodo = Math.round(0.25 * (b.totales||0) * 100)/100;
   const primaPendiente = req.solicitaPrima ? 0 : primaTotalPeriodo;
+  const ordinal = periodo.anios+1;
 
+  // Encabezado tipo membrete: título a la izquierda, logo "sultana" a la derecha
   doc.setFont("helvetica","bold"); doc.setFontSize(15);
   doc.text("BOLETA DE VACACIONES", marginL, y);
-  doc.setFont("helvetica","normal"); doc.setFontSize(10.5);
-  doc.text(`Fecha: ${hoyStr}`, pageWidth-marginR, y, {align:"right"});
+  const iconSize = 7;
+  const iconX = pageWidth - marginR - 34;
+  dibujarIconoMarca(doc, iconX, y-6.5, iconSize, [15,62,88]);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.setTextColor(15,62,88);
+  doc.text("sultana", iconX+iconSize+3, y-1);
+  doc.setTextColor(0,0,0);
   y += 13;
+
+  doc.setFont("helvetica","normal"); doc.setFontSize(10.5);
+  doc.text(`Santa Catarina, N.L. a ${hoy.getDate()} de ${MESES[hoy.getMonth()]} de ${hoy.getFullYear()}`, marginL, y);
+  y += 11;
 
   doc.text("Departamento de Personal:", marginL, y); y += 7;
   doc.text("Presente:", marginL, y); y += 11;
 
-  const parrafo1 = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} de ${ff.getFullYear()}, el Sr./Sra. ${req.nombreEmpleado}`;
-  let lineas = doc.splitTextToSize(parrafo1, usableWidth);
-  doc.text(lineas, marginL, y); y += lineas.length*6 + 6;
-
-  const ordinal = periodo.anios+1;
-  const parrafo2 = `No. ${req.nomina} del Departamento de ${categoriaDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinal}\u00b0 año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
-  lineas = doc.splitTextToSize(parrafo2, usableWidth);
+  const parrafo = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} el Sr./Sra. ${req.nombreEmpleado} No. ${req.nomina} del Departamento de ${departamentoDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinal}\u00b0 año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
+  const lineas = doc.splitTextToSize(parrafo, usableWidth);
   doc.text(lineas, marginL, y); y += lineas.length*6 + 10;
 
   doc.text(`Disfrutará: ${req.diasHabiles} días de Vacaciones, y ${primaEste} días de Prima de Vacaciones`, marginL, y); y += 9;
   doc.text(`Pendiente: ${b.restantes} días de Vacaciones, y ${primaPendiente} días de Prima de Vacaciones`, marginL, y); y += 32;
 
-  doc.setDrawColor(60,60,60);
+  doc.setDrawColor(60,60,60); doc.setLineWidth(0.3);
   doc.line(marginL, y, marginL+70, y);
   doc.line(pageWidth-marginR-70, y, pageWidth-marginR, y);
   y += 5;
   doc.setFontSize(9);
-  doc.text("Firma del empleado", marginL+8, y);
-  doc.text("Firma de Recursos Humanos", pageWidth-marginR-70, y);
+  doc.text("Firma de Enterado", marginL+10, y);
+  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-70, y);
 
   doc.save(`Boleta_${req.nomina}_${req.fechaInicio}.pdf`);
 }
