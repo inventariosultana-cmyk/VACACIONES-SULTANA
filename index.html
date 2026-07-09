@@ -779,14 +779,17 @@ function renderEmpleadoShell(){
 
           ${primaPrevia ? `
             <p class="hint">${primaPrevia.manual ? "Tu prima vacacional de este periodo ya fue marcada como pagada por RH." : `Ya solicitaste tu prima vacacional este periodo (con la solicitud del ${primaPrevia.fechaInicio}).`} Solo se puede una vez por periodo.</p>
-          ` : !primaElegible ? `
-            <p class="hint">Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud.</p>
           ` : `
-            <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
-              <input type="checkbox" id="solicitaPrima" style="width:auto;" />
-              <span style="font-weight:600;font-size:13.5px;color:var(--ink);">También quiero solicitar mi prima vacacional (25%, una vez por periodo)</span>
-            </label>
-            <div id="primaPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+            <div id="primaNoElegibleWrap" class="hint" style="display:none;">
+              Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud (o que esta misma solicitud sea de ${DIAS_MINIMOS_PARA_PRIMA} días o más).
+            </div>
+            <div id="primaElegibleWrap" style="display:none;">
+              <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
+                <input type="checkbox" id="solicitaPrima" style="width:auto;" />
+                <span style="font-weight:600;font-size:13.5px;color:var(--ink);">También quiero solicitar mi prima vacacional (25%, una vez por periodo)</span>
+              </label>
+              <div id="primaPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+            </div>
           `}
 
           <label>Comentario (opcional)</label>
@@ -834,6 +837,14 @@ function renderEmpleadoShell(){
     } else {
       preview.textContent = "";
     }
+    const primaNoElegibleWrap = document.getElementById("primaNoElegibleWrap");
+    const primaElegibleWrap = document.getElementById("primaElegibleWrap");
+    if(primaNoElegibleWrap && primaElegibleWrap){
+      const puedePedirPrima = primaElegible || dias>=DIAS_MINIMOS_PARA_PRIMA;
+      primaNoElegibleWrap.style.display = puedePedirPrima ? "none" : "block";
+      primaElegibleWrap.style.display = puedePedirPrima ? "block" : "none";
+      if(!puedePedirPrima && primaCheckbox) primaCheckbox.checked = false;
+    }
     const primaPreview = document.getElementById("primaPreview");
     if(primaPreview){
       if(primaCheckbox && primaCheckbox.checked && dias>0){
@@ -847,6 +858,7 @@ function renderEmpleadoShell(){
   fiInput.addEventListener("change", actualizarPreview);
   ffInput.addEventListener("change", actualizarPreview);
   if(primaCheckbox) primaCheckbox.addEventListener("change", actualizarPreview);
+  actualizarPreview();
 }
 
 async function handleNuevaSolicitud(e){
@@ -894,8 +906,8 @@ async function handleNuevaSolicitud(e){
         errBox.innerHTML = `<div class="error-box">Ya solicitaste tu prima vacacional este periodo; solo se puede una vez.</div>`;
         return;
       }
-      if(!elegibleParaPrima(state.user.nomina)){
-        errBox.innerHTML = `<div class="error-box">Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud.</div>`;
+      if(!elegibleParaPrima(state.user.nomina) && dias<DIAS_MINIMOS_PARA_PRIMA){
+        errBox.innerHTML = `<div class="error-box">Para solicitar tu prima vacacional, primero debes haber disfrutado al menos una vez un periodo de ${DIAS_MINIMOS_PARA_PRIMA} días completos de vacaciones en una sola solicitud (o que esta misma solicitud sea de ${DIAS_MINIMOS_PARA_PRIMA} días o más).</div>`;
         return;
       }
       solicitaPrima = true;
