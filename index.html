@@ -301,6 +301,10 @@ function isoWeek(dateStr){
 }
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const DIAS_SEMANA = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const ORDINALES = ["","primer","segundo","tercer","cuarto","quinto","sexto","séptimo","octavo","noveno","décimo"];
+function ordinalTexto(n){
+  return ORDINALES[n] || `${n}°`;
+}
 function todayStr(){
   const d = new Date(); d.setHours(0,0,0,0);
   return d.toISOString().slice(0,10);
@@ -334,6 +338,28 @@ function calcularPeriodoActual(fechaIngresoStr){
   const inicioSiguiente = fechaAniversario(fechaIngresoStr, anios+1);
   const fin = addDaysStr(inicioSiguiente, -1);
   return {inicio, fin, anios};
+}
+const DIAS_MAX_ADELANTO = 3;
+const MESES_ANTES_ADELANTO = 6;
+function fechaMenosMeses(dateStr, meses){
+  const d = new Date(dateStr+"T00:00:00");
+  d.setMonth(d.getMonth()-meses);
+  return toISODate(d);
+}
+// ¿Está el empleado dentro de la ventana de 6 meses antes de su próximo
+// aniversario? De ser así puede adelantar hasta 3 días de su siguiente periodo.
+function ventanaAdelanto(fechaIngresoStr){
+  const periodo = calcularPeriodoActual(fechaIngresoStr);
+  const proximoInicio = fechaAniversario(fechaIngresoStr, periodo.anios+1);
+  const inicioVentana = fechaMenosMeses(proximoInicio, MESES_ANTES_ADELANTO);
+  const hoy = todayStr();
+  return { enVentana: hoy>=inicioVentana && hoy<proximoInicio, proximoInicio };
+}
+// Cuántos días de adelanto ya se tomaron (aprobados) para el siguiente periodo
+function adelantoTomadoPara(nomina, proximoInicio){
+  return state.requests
+    .filter(r=>r.nomina===nomina && r.estado==="aprobado" && r.esAdelanto && r.adelantoParaPeriodoInicio===proximoInicio)
+    .reduce((s,r)=>s+(r.diasAdelanto||0),0);
 }
 const PALETA_CATEGORIAS = ["#2F6F5E","#C9793A","#5B7FBD","#A2557B","#3D8B5F","#7A5C3E","#4E8FA6","#8C6E4E","#6E6E9E","#9C6644"];
 function colorCategoria(cat){
@@ -378,11 +404,11 @@ const ICONO_MARCA = `<svg class="brand-icon" viewBox="0 0 100 100" fill="none" x
 function marcaLockup(tagline){
   return `
     <div class="brand-lockup">
-      ${ICONO_MARCA}
       <div>
         <div class="brand-wordmark">sultana</div>
         ${tagline? `<div class="brand-tagline">${tagline}</div>` : ""}
       </div>
+      ${ICONO_MARCA}
     </div>`;
 }
 
@@ -621,12 +647,17 @@ function balanceDe(nomina){
   const tieneAjuste = (emp.diasRestantesIniciales!==null && emp.diasRestantesIniciales!==undefined)
     && emp.diasRestantesInicialesPeriodoInicio === periodo.inicio;
 
+  // Adelanto tomado en la ventana de 6 meses previa a este periodo (préstamo
+  // de hasta 3 días contra el periodo que apenas comenzó).
+  const adelantoPrevio = adelantoTomadoPara(nomina, periodo.inicio);
+
   // "totales" SIEMPRE es el número real del periodo (por antigüedad o manual).
-  // "restantes" depende de si hay ajuste o no. "tomados" se deriva de los otros
-  // dos (totales - restantes) para que los tres números siempre cuadren entre sí.
+  // "restantes" depende de si hay ajuste o no, y siempre resta el adelanto ya
+  // tomado. "tomados" se deriva de los otros dos (totales - restantes) para
+  // que los tres números siempre cuadren entre sí.
   const restantes = tieneAjuste
-    ? Math.max(0, emp.diasRestantesIniciales - tomadosPeriodo)
-    : Math.max(0, totalesCalculados - tomadosPeriodo);
+    ? Math.max(0, emp.diasRestantesIniciales - tomadosPeriodo - adelantoPrevio)
+    : Math.max(0, totalesCalculados - tomadosPeriodo - adelantoPrevio);
   const tomados = Math.max(0, totalesCalculados - restantes);
 
   return {antig:periodo.anios, totales:totalesCalculados, tomados, restantes, esAdmin:false, ajustado:tieneAjuste};
@@ -678,6 +709,11 @@ function renderEmpleadoShell(){
     .filter(r=>r.nomina===state.user.nomina)
     .sort((a,b)=> (b.fechaInicio||"").localeCompare(a.fechaInicio||""));
   const primaPrevia = primaYaSolicitadaEstePeriodo(state.user.nomina);
+  const empActual = state.employees.find(e=>e.nomina===state.user.nomina);
+  const ventana = empActual ? ventanaAdelanto(empActual.fechaIngreso) : {enVentana:false};
+  const adelantoDisponible = ventana.enVentana
+    ? DIAS_MAX_ADELANTO - adelantoTomadoPara(state.user.nomina, ventana.proximoInicio)
+    : 0;
 
   root.innerHTML = `
     ${topbarHtml()}
@@ -724,6 +760,10 @@ function renderEmpleadoShell(){
             Dos días = 02 al 03 de enero, y así sucesivamente. Solo se cuentan días hábiles (lunes a sábado; domingos, días festivos oficiales y tu cumpleaños no cuentan).
             Las solicitudes deben hacerse con al menos ${DIAS_ANTICIPACION} días de anticipación.
           </p>
+          ${ventana.enVentana && adelantoDisponible>0 ? `
+            <p class="hint" style="color:var(--accent-dark);">
+              Estás a menos de ${MESES_ANTES_ADELANTO} meses de tu próximo aniversario: si ya no te quedan días de este periodo, puedes adelantar hasta ${adelantoDisponible} día(s) de tu siguiente periodo.
+            </p>` : ""}
           <div id="diasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
 
           ${primaPrevia ? `
@@ -753,7 +793,7 @@ function renderEmpleadoShell(){
               <tr>
                 <td class="num">${r.fechaInicio}</td>
                 <td class="num">${r.fechaFin}</td>
-                <td class="num">${r.diasHabiles}</td>
+                <td class="num">${r.diasHabiles}${r.esAdelanto? ` (${r.diasAdelanto} adelanto)`:""}</td>
                 <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
                 <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
                 <td>${r.comentarioAdmin||"—"}</td>
@@ -816,9 +856,23 @@ async function handleNuevaSolicitud(e){
       return;
     }
     const b = balanceDe(state.user.nomina);
+    const emp = state.employees.find(e=>e.nomina===state.user.nomina);
+    let esAdelanto = false, diasAdelanto = 0, adelantoParaPeriodoInicio = null;
     if(dias > b.restantes){
-      errBox.innerHTML = `<div class="error-box">Solo tienes ${b.restantes} día(s) disponibles y estás solicitando ${dias}.</div>`;
-      return;
+      const excedente = dias - b.restantes;
+      const ventana = ventanaAdelanto(emp.fechaIngreso);
+      if(!ventana.enVentana){
+        errBox.innerHTML = `<div class="error-box">Solo tienes ${b.restantes} día(s) disponibles y estás solicitando ${dias}.</div>`;
+        return;
+      }
+      const yaAdelantado = adelantoTomadoPara(state.user.nomina, ventana.proximoInicio);
+      if(yaAdelantado + excedente > DIAS_MAX_ADELANTO){
+        errBox.innerHTML = `<div class="error-box">Solo tienes ${b.restantes} día(s) disponibles. Puedes adelantar hasta ${DIAS_MAX_ADELANTO} días de tu siguiente periodo (ya llevas ${yaAdelantado} adelantados), pero esta solicitud necesitaría ${excedente}.</div>`;
+        return;
+      }
+      esAdelanto = true;
+      diasAdelanto = excedente;
+      adelantoParaPeriodoInicio = ventana.proximoInicio;
     }
     const primaCheckbox = document.getElementById("solicitaPrima");
     let solicitaPrima = false, diasPrimaVacacional = 0;
@@ -835,10 +889,11 @@ async function handleNuevaSolicitud(e){
       nombreEmpleado: state.user.nombre,
       fechaInicio: fi, fechaFin: ff, diasHabiles: dias,
       solicitaPrima, diasPrimaVacacional,
+      esAdelanto, diasAdelanto, adelantoParaPeriodoInicio,
       estado: "pendiente", comentarioEmpleado: comentario, comentarioAdmin:"",
       fechaSolicitud: serverTimestamp()
     });
-    state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}${solicitaPrima? `, + prima vacacional de ${diasPrimaVacacional} días`:""}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
+    state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}${esAdelanto? `, de los cuales ${diasAdelanto} son adelanto de tu siguiente periodo`:""}${solicitaPrima? `, + prima vacacional de ${diasPrimaVacacional} días`:""}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
     render();
   }catch(err){
     errBox.innerHTML = `<div class="error-box">No se pudo enviar la solicitud: ${err.message}</div>`;
@@ -1188,7 +1243,7 @@ function renderTabSolicitudes(container){
             <td>${categoriaDe(r.nomina)||"—"}</td>
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
-            <td class="num">${r.diasHabiles}</td>
+            <td class="num">${r.diasHabiles}${r.esAdelanto? ` (${r.diasAdelanto} adelanto)`:""}</td>
             <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
             <td>${r.comentarioEmpleado||"—"}</td>
             <td class="row-actions">
@@ -1217,7 +1272,7 @@ function renderTabSolicitudes(container){
             <td>${categoriaDe(r.nomina)||"—"}</td>
             <td class="num">${r.fechaInicio}</td>
             <td class="num">${r.fechaFin}</td>
-            <td class="num">${r.diasHabiles}</td>
+            <td class="num">${r.diasHabiles}${r.esAdelanto? ` (${r.diasAdelanto} adelanto)`:""}</td>
             <td class="num">${r.solicitaPrima? `${r.diasPrimaVacacional} días` : "—"}</td>
             <td><span class="status ${r.estado}">${r.estado.toUpperCase()}</span></td>
             <td class="row-actions">
@@ -1397,17 +1452,18 @@ function construirBoletaPDF(req, emp){
   const primaEste = req.solicitaPrima ? req.diasPrimaVacacional : 0;
   const primaTotalPeriodo = Math.round(0.25 * (b.totales||0) * 100)/100;
   const primaPendiente = req.solicitaPrima ? 0 : primaTotalPeriodo;
-  const ordinal = periodo.anios+1;
+  const ordinal = periodo.anios;
 
   // Encabezado tipo membrete: título a la izquierda, logo "sultana" a la derecha
   doc.setFont("helvetica","bold"); doc.setFontSize(15);
   doc.text("BOLETA DE VACACIONES", marginL, y);
-  const iconSize = 7;
-  const iconX = pageWidth - marginR - 34;
-  dibujarIconoMarca(doc, iconX, y-6.5, iconSize, [15,62,88]);
   doc.setFont("helvetica","bold"); doc.setFontSize(13);
   doc.setTextColor(15,62,88);
-  doc.text("sultana", iconX+iconSize+3, y-1);
+  const textoMarcaAncho = doc.getTextWidth("sultana");
+  const iconSize = 7, gapMarca = 3;
+  const marcaX = pageWidth - marginR - (textoMarcaAncho + gapMarca + iconSize);
+  doc.text("sultana", marcaX, y-1);
+  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-6.5, iconSize, [15,62,88]);
   doc.setTextColor(0,0,0);
   y += 13;
 
@@ -1418,7 +1474,7 @@ function construirBoletaPDF(req, emp){
   doc.text("Departamento de Personal:", marginL, y); y += 7;
   doc.text("Presente:", marginL, y); y += 11;
 
-  const parrafo = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} el Sr./Sra. ${req.nombreEmpleado} No. ${req.nomina} del Departamento de ${departamentoDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinal}\u00b0 año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
+  const parrafo = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} el Sr./Sra. ${req.nombreEmpleado} No. ${req.nomina} del Departamento de ${departamentoDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinalTexto(ordinal)} año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
   const lineas = doc.splitTextToSize(parrafo, usableWidth);
   doc.text(lineas, marginL, y); y += lineas.length*6 + 10;
 
