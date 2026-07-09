@@ -40,7 +40,7 @@
   }
   .mono{font-family:'IBM Plex Mono',monospace;}
   #root{min-height:100vh;display:flex;flex-direction:column;}
-  .brand-lockup{display:flex;align-items:center;gap:10px;}
+  .brand-lockup{display:flex;align-items:center;gap:5px;}
   .brand-icon{width:26px;height:26px;flex-shrink:0;}
   .brand-wordmark{font-family:'Poppins',sans-serif;font-weight:700;font-size:20px;letter-spacing:-0.01em;}
   .brand-tagline{font-family:'Inter',sans-serif;font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);}
@@ -1434,13 +1434,38 @@ function dibujarIconoMarca(doc, x, y, size, colorRGB){
   doc.line(x, y+s, x, y+s*0.64);
 }
 
+const COLOR_BOLETA = [41,111,153]; // azul de la boleta original
+
+function escribirSegmentos(doc, x, y, segments, tamano){
+  let curX = x;
+  segments.forEach(seg=>{
+    doc.setFont("helvetica", seg.bold?"bold":"normal");
+    doc.setFontSize(tamano);
+    if(seg.text !== undefined){
+      doc.text(seg.text, curX, y);
+      curX += doc.getTextWidth(seg.text);
+    } else if(seg.blank !== undefined){
+      const val = String(seg.blank);
+      const valWidth = doc.getTextWidth(val);
+      const lineWidth = Math.max(valWidth+4, seg.minWidth||16);
+      doc.text(val, curX + (lineWidth-valWidth)/2, y-0.8);
+      doc.setLineWidth(0.25);
+      doc.line(curX, y+1, curX+lineWidth, y+1);
+      curX += lineWidth + 1.5;
+    }
+  });
+  return curX;
+}
+
 function construirBoletaPDF(req, emp){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:"mm", format:"letter" });
-  const marginL = 22, marginR = 22;
+  const marginL = 20, marginR = 20;
   const pageWidth = doc.internal.pageSize.getWidth();
-  const usableWidth = pageWidth - marginL - marginR;
   let y = 20;
+  const C = COLOR_BOLETA;
+  doc.setTextColor(C[0],C[1],C[2]);
+  doc.setDrawColor(C[0],C[1],C[2]);
 
   const hoy = new Date();
   const fi = new Date(req.fechaInicio+"T00:00:00");
@@ -1454,40 +1479,106 @@ function construirBoletaPDF(req, emp){
   const primaPendiente = req.solicitaPrima ? 0 : primaTotalPeriodo;
   const ordinal = periodo.anios;
 
-  // Encabezado tipo membrete: título a la izquierda, logo "sultana" a la derecha
-  doc.setFont("helvetica","bold"); doc.setFontSize(15);
+  // Encabezado: título a la izquierda, logo "sultana" (con el cuadro a la derecha)
+  doc.setFont("helvetica","bold"); doc.setFontSize(16);
   doc.text("BOLETA DE VACACIONES", marginL, y);
-  doc.setFont("helvetica","bold"); doc.setFontSize(13);
-  doc.setTextColor(15,62,88);
+  doc.setFontSize(14);
   const textoMarcaAncho = doc.getTextWidth("sultana");
-  const iconSize = 7, gapMarca = 3;
+  const iconSize = 7, gapMarca = 1;
   const marcaX = pageWidth - marginR - (textoMarcaAncho + gapMarca + iconSize);
   doc.text("sultana", marcaX, y-1);
-  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-6.5, iconSize, [15,62,88]);
-  doc.setTextColor(0,0,0);
+  dibujarIconoMarca(doc, marcaX+textoMarcaAncho+gapMarca, y-6.5, iconSize, C);
+  y += 15;
+
+  // Fecha
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Santa Catarina, N.L. a "},
+    {blank: hoy.getDate(), minWidth:10},
+    {text:" de "},
+    {blank: MESES[hoy.getMonth()], minWidth:22},
+    {text:" de "},
+    {blank: hoy.getFullYear(), minWidth:16},
+  ], 11);
   y += 13;
 
-  doc.setFont("helvetica","normal"); doc.setFontSize(10.5);
-  doc.text(`Santa Catarina, N.L. a ${hoy.getDate()} de ${MESES[hoy.getMonth()]} de ${hoy.getFullYear()}`, marginL, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(11);
+  doc.text("Departamento de Personal:", marginL, y); y += 8;
+  doc.text("Presente:", marginL, y); y += 12;
+
+  // Cuerpo: mismas líneas y espacios que la boleta física
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Hacemos de su conocimiento que del día "},
+    {blank: fi.getDate(), minWidth:10},
+    {text:" de "},
+    {blank: MESES[fi.getMonth()], minWidth:22},
+    {text:" al día "},
+    {blank: ff.getDate(), minWidth:10},
+    {text:" de "},
+  ], 11);
   y += 11;
 
-  doc.text("Departamento de Personal:", marginL, y); y += 7;
-  doc.text("Presente:", marginL, y); y += 11;
+  escribirSegmentos(doc, marginL, y, [
+    {blank: MESES[ff.getMonth()], minWidth:22},
+    {text:" de "},
+    {blank: ff.getFullYear(), minWidth:16},
+    {text:" el Sr./Sra. "},
+    {blank: req.nombreEmpleado, minWidth:60},
+  ], 11);
+  y += 11;
 
-  const parrafo = `Hacemos de su conocimiento que del día ${fi.getDate()} de ${MESES[fi.getMonth()]} al día ${ff.getDate()} de ${MESES[ff.getMonth()]} el Sr./Sra. ${req.nombreEmpleado} No. ${req.nomina} del Departamento de ${departamentoDe(req.nomina)||"—"}, disfrutará de sus vacaciones correspondientes al ${ordinalTexto(ordinal)} año de sus servicios prestados y que comprende del mes de ${MESES[inicioPeriodo.getMonth()]} de ${inicioPeriodo.getFullYear()} al mes de ${MESES[finPeriodo.getMonth()]} de ${finPeriodo.getFullYear()}.`;
-  const lineas = doc.splitTextToSize(parrafo, usableWidth);
-  doc.text(lineas, marginL, y); y += lineas.length*6 + 10;
+  escribirSegmentos(doc, marginL, y, [
+    {text:"No. "},
+    {blank: req.nomina, minWidth:18},
+    {text:" del Departamento de "},
+    {blank: departamentoDe(req.nomina)||"—", minWidth:40},
+    {text:", disfrutará de sus"},
+  ], 11);
+  y += 11;
 
-  doc.text(`Disfrutará: ${req.diasHabiles} días de Vacaciones, y ${primaEste} días de Prima de Vacaciones`, marginL, y); y += 9;
-  doc.text(`Pendiente: ${b.restantes} días de Vacaciones, y ${primaPendiente} días de Prima de Vacaciones`, marginL, y); y += 32;
+  escribirSegmentos(doc, marginL, y, [
+    {text:"vacaciones correspondientes al "},
+    {blank: `${ordinalTexto(ordinal)} año`, minWidth:26},
+    {text:" de sus servicios prestados y que"},
+  ], 11);
+  y += 11;
 
-  doc.setDrawColor(60,60,60); doc.setLineWidth(0.3);
-  doc.line(marginL, y, marginL+70, y);
-  doc.line(pageWidth-marginR-70, y, pageWidth-marginR, y);
+  escribirSegmentos(doc, marginL, y, [
+    {text:"comprende del mes de "},
+    {blank: MESES[inicioPeriodo.getMonth()], minWidth:22},
+    {text:" de "},
+    {blank: inicioPeriodo.getFullYear(), minWidth:16},
+    {text:" al mes de "},
+    {blank: MESES[finPeriodo.getMonth()], minWidth:22},
+    {text:" de "},
+    {blank: finPeriodo.getFullYear(), minWidth:16},
+  ], 11);
+  y += 15;
+
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Disfrutará: "},
+    {blank: req.diasHabiles, minWidth:12},
+    {text:" días de Vacaciones, y "},
+    {blank: primaEste, minWidth:12},
+    {text:" días de Prima de Vacaciones"},
+  ], 11);
+  y += 12;
+
+  escribirSegmentos(doc, marginL, y, [
+    {text:"Pendiente: "},
+    {blank: b.restantes, minWidth:12},
+    {text:" días de Vacaciones, y "},
+    {blank: primaPendiente, minWidth:12},
+    {text:" días de Prima de Vacaciones"},
+  ], 11);
+  y += 28;
+
+  doc.setLineWidth(0.3);
+  doc.line(marginL, y, marginL+65, y);
+  doc.line(pageWidth-marginR-65, y, pageWidth-marginR, y);
   y += 5;
-  doc.setFontSize(9);
-  doc.text("Firma de Enterado", marginL+10, y);
-  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-70, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Firma de Enterado", marginL+8, y);
+  doc.text("Aprobado por Jefe del Depto.", pageWidth-marginR-65, y);
 
   return doc;
 }
