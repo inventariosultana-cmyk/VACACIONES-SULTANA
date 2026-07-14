@@ -205,6 +205,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -237,6 +238,20 @@ if (!CONFIG_PENDING) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
+}
+
+/* =========================================================
+   2) CONFIGURACIÓN DE EMAILJS (para notificaciones por correo)
+   Crea una cuenta gratis en https://www.emailjs.com y reemplaza
+   estos 4 valores. Ver instrucciones completas al final del README.
+   ========================================================= */
+const EMAILJS_PUBLIC_KEY = "A3whjdPFJe7s-R7QM";
+const EMAILJS_SERVICE_ID = "service_eequ5pc";
+const EMAILJS_TEMPLATE_SOLICITUD = "template_l2dv4xb";
+const EMAILJS_TEMPLATE_BOLETA = "TU_TEMPLATE_ID_BOLETA";
+const EMAILJS_CONFIG_PENDING = EMAILJS_PUBLIC_KEY.includes("TU_EMAILJS");
+if(!EMAILJS_CONFIG_PENDING && typeof emailjs !== "undefined"){
+  emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
 }
 
 /* ================= Utilidades de vacaciones (LFT 2023) ================= */
@@ -420,6 +435,64 @@ function solicitudEnAlcance(scope, nominaSolicitante){
   return departamentoDe(nominaSolicitante) === scope.departamento;
 }
 
+/* ================= Notificaciones por correo (EmailJS) ================= */
+// Administradores que deberían enterarse de una solicitud de este empleado
+// (según su departamento), y que además tengan correo registrado.
+function adminsParaNotificar(nominaSolicitante){
+  return state.employees.filter(e=>{
+    if(!e.isAdmin || !e.correo) return false;
+    const scope = alcanceAdmin(e.nomina);
+    return solicitudEnAlcance(scope, nominaSolicitante);
+  });
+}
+async function enviarNotificacionNuevaSolicitud(req){
+  if(EMAILJS_CONFIG_PENDING || typeof emailjs==="undefined") return;
+  const admins = adminsParaNotificar(req.nomina);
+  for(const admin of admins){
+    try{
+      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_SOLICITUD, {
+        to_email: admin.correo,
+        admin_nombre: admin.nombre,
+        empleado_nombre: req.nombreEmpleado,
+        empleado_nomina: req.nomina,
+        departamento: departamentoDe(req.nomina)||"—",
+        categoria: categoriaDe(req.nomina)||"—",
+        fecha_inicio: req.fechaInicio,
+        fecha_fin: req.fechaFin,
+        dias_habiles: req.diasHabiles,
+        comentario: req.comentarioEmpleado||"—",
+      });
+    }catch(err){
+      console.error("No se pudo notificar por correo a", admin.correo, err);
+    }
+  }
+}
+async function enviarBoletaPorCorreoARH(req, emp){
+  if(EMAILJS_CONFIG_PENDING || typeof emailjs==="undefined") return;
+  const destinatariosRH = state.employees.filter(e=>e.isAdmin && e.correo && categoriaDe(e.nomina)==="RH");
+  if(destinatariosRH.length===0) return;
+  const pdfDoc = construirBoletaPDF(req, emp);
+  const datauri = pdfDoc.output("datauristring");
+  const base64 = datauri.split(",")[1];
+  for(const admin of destinatariosRH){
+    try{
+      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_BOLETA, {
+        to_email: admin.correo,
+        admin_nombre: admin.nombre,
+        empleado_nombre: req.nombreEmpleado,
+        empleado_nomina: req.nomina,
+        fecha_inicio: req.fechaInicio,
+        fecha_fin: req.fechaFin,
+        dias_habiles: req.diasHabiles,
+        boleta_pdf: base64,
+        boleta_filename: `Boleta_${req.nomina}_${req.fechaInicio}.pdf`,
+      });
+    }catch(err){
+      console.error("No se pudo enviar la boleta por correo a", admin.correo, err);
+    }
+  }
+}
+
 /* ================= Estado ================= */
 let state = {
   user: null,        // {nomina, nombre, isAdmin}
@@ -433,6 +506,8 @@ let state = {
   catFilterAbierto: false,
   deptFilterAbierto: false,
   notifInicializado: false,
+  historialMes: null,
+  historialAnio: null,
   superadminVerTodo: localStorage.getItem("vacaciones_superadmin_ver_todo") === "true",
   view: "empleados",
   loginError: "",
@@ -503,6 +578,9 @@ function renderLogin(){
           <button class="btn-primary" type="submit" ${state.loading?"disabled":""}>${state.loading? "Entrando…" : "Entrar"}</button>
         </form>
         <p class="hint">¿No tienes número de nómina asignado? Pídelo a Recursos Humanos.</p>
+        <p class="hint" style="margin-top:10px;">
+          <button class="link-btn" id="forgotLink">¿Olvidaste tu contraseña?</button>
+        </p>
         <p class="hint" style="margin-top:18px;">
           <button class="link-btn" id="setupLink">¿Primera vez que se usa el sistema? Configurar administrador</button>
         </p>
@@ -510,6 +588,25 @@ function renderLogin(){
     </div>`;
   document.getElementById("loginForm").addEventListener("submit", handleLogin);
   document.getElementById("setupLink").addEventListener("click", renderSetupAdmin);
+  document.getElementById("forgotLink").addEventListener("click", renderForgotPassword);
+}
+
+function renderForgotPassword(e){
+  e.preventDefault();
+  root.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        ${marcaLockup("Recuperar acceso")}
+        <p class="login-sub" style="margin-top:16px;">Por seguridad, nadie (ni RH) puede ver tu contraseña actual — solo se puede reiniciar para que elijas una nueva. Sigue estos pasos:</p>
+        <ol style="padding-left:20px;color:var(--ink-soft);font-size:13.5px;line-height:1.9;">
+          <li>Avísale a Recursos Humanos que olvidaste tu contraseña, con tu número de nómina.</li>
+          <li>RH reinicia tu acceso desde la consola de Firebase (tarda menos de un minuto de su lado).</li>
+          <li>En cuanto te confirmen que ya está, regresa aquí e inicia sesión con tu número de nómina y la contraseña nueva que tú elijas — el sistema la toma como si fuera tu primera vez.</li>
+        </ol>
+        <p class="hint"><button class="link-btn" id="backFromForgot">Volver al inicio de sesión</button></p>
+      </div>
+    </div>`;
+  document.getElementById("backFromForgot").addEventListener("click", (ev)=>{ev.preventDefault(); render();});
 }
 
 async function handleLogin(e){
@@ -990,7 +1087,7 @@ async function handleNuevaSolicitud(e){
       solicitaPrima = true;
       diasPrimaVacacional = Math.round(b.totales * 0.25 * 100)/100;
     }
-    await addDoc(collection(db,"requests"), {
+    const nuevaSolicitud = {
       nomina: state.user.nomina,
       nombreEmpleado: state.user.nombre,
       fechaInicio: fi, fechaFin: ff, diasHabiles: dias,
@@ -998,7 +1095,9 @@ async function handleNuevaSolicitud(e){
       esAdelanto, diasAdelanto, adelantoParaPeriodoInicio,
       estado: "pendiente", comentarioEmpleado: comentario, comentarioAdmin:"",
       fechaSolicitud: serverTimestamp()
-    });
+    };
+    await addDoc(collection(db,"requests"), nuevaSolicitud);
+    enviarNotificacionNuevaSolicitud(nuevaSolicitud); // no bloquea el flujo si falla
     state.reqFeedback = `Tu solicitud del ${fi} al ${ff} (${dias} día${dias===1?"":"s"} hábil${dias===1?"":"es"}${esAdelanto? `, de los cuales ${diasAdelanto} son adelanto de tu siguiente periodo`:""}${solicitaPrima? `, + prima vacacional de ${diasPrimaVacacional} días`:""}) fue enviada y está pendiente de aprobación. La verás abajo en "Tus solicitudes".`;
     render();
   }catch(err){
@@ -1364,6 +1463,9 @@ function renderEmpForm(emp){
             <input type="date" id="f_nacimiento" value="${emp?.fechaNacimiento||""}" />
           </div>
         </div>
+        <label>Correo electrónico (opcional)</label>
+        <input type="email" id="f_correo" value="${emp?.correo||""}" placeholder="nombre@empresa.com" />
+        <p class="hint">Solo aplica si esta persona es administrador: ahí es donde le llegarán las notificaciones de solicitudes nuevas de su departamento (y, si es RH, la boleta en PDF cuando se aprueba una).</p>
         <div class="field-row">
           <div>
             <label>Días anuales manuales (opcional)</label>
@@ -1433,6 +1535,7 @@ function renderEmpForm(emp){
     const fecha = document.getElementById("f_fecha").value;
     const fechaNacimientoRaw = document.getElementById("f_nacimiento").value;
     const fechaNacimiento = fechaNacimientoRaw === "" ? null : fechaNacimientoRaw;
+    const correo = document.getElementById("f_correo").value.trim();
     const manualRaw = document.getElementById("f_manual").value;
     const diasManual = manualRaw===""? null : Number(manualRaw);
     const categoria = document.getElementById("f_categoria").value;
@@ -1454,9 +1557,9 @@ function renderEmpForm(emp){
           errBox.innerHTML = `<div class="error-box">Ya existe un empleado con esa nómina.</div>`;
           return;
         }
-        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin, activo:true});
+        await setDoc(doc(db,"employees",nomina), {nomina, nombre, fechaIngreso:fecha, fechaNacimiento, correo, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin, activo:true});
       } else {
-        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin});
+        await updateDoc(doc(db,"employees",nomina), {nombre, fechaIngreso:fecha, fechaNacimiento, correo, diasManual, categoria, departamento, diasRestantesIniciales, diasRestantesInicialesPeriodoInicio, primaPagadaManual, primaPagadaManualPeriodoInicio, isAdmin});
       }
       wrap.innerHTML="";
     }catch(err){
@@ -1469,8 +1572,25 @@ function renderTabSolicitudes(container){
   const scope = alcanceAdmin(state.user.nomina);
   const pendientes = state.requests.filter(r=>r.estado==="pendiente" && solicitudEnAlcance(scope, r.nomina))
     .sort((a,b)=>(a.fechaInicio||"").localeCompare(b.fechaInicio||""));
-  const resueltas = state.requests.filter(r=>r.estado!=="pendiente" && solicitudEnAlcance(scope, r.nomina))
+
+  const hoy = new Date();
+  if(state.historialMes===undefined || state.historialMes===null) state.historialMes = hoy.getMonth();
+  if(!state.historialAnio) state.historialAnio = hoy.getFullYear();
+  const mesH = state.historialMes, anioH = state.historialAnio;
+  const pad = n=>String(n).padStart(2,"0");
+  const inicioMesH = `${anioH}-${pad(mesH+1)}-01`;
+  const finMesH = `${anioH}-${pad(mesH+1)}-${pad(new Date(anioH,mesH+1,0).getDate())}`;
+
+  const resueltasTodas = state.requests.filter(r=>r.estado!=="pendiente" && solicitudEnAlcance(scope, r.nomina));
+  const resueltas = resueltasTodas
+    .filter(r=>r.fechaInicio>=inicioMesH && r.fechaInicio<=finMesH)
     .sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+
+  const aniosConHistorial = [...new Set(resueltasTodas.map(r=>r.fechaInicio? r.fechaInicio.slice(0,4):null).filter(Boolean))].map(Number);
+  const anioActual = hoy.getFullYear();
+  const rangoAnios = [];
+  for(let y=anioActual-2; y<=anioActual+1; y++) rangoAnios.push(y);
+  const aniosDisponibles = [...new Set([...rangoAnios, ...aniosConHistorial, anioActual])].sort((a,b)=>a-b);
 
   container.innerHTML = `
     ${!scope.todo? `<div class="hint" style="margin-bottom:14px;">Estás viendo solo las solicitudes del departamento <strong>${scope.departamento}</strong>.</div>`:""}
@@ -1504,9 +1624,19 @@ function renderTabSolicitudes(container){
     <div class="card">
       <div class="toolbar">
         <h3 style="margin:0;">Historial resuelto</h3>
-        ${resueltas.length>0? `<button class="btn-danger btn-small" id="borrarTodoBtn">Borrar todo el historial</button>`:""}
+        ${resueltas.length>0? `<button class="btn-danger btn-small" id="borrarTodoBtn">Borrar lo de este mes</button>`:""}
       </div>
-      ${resueltas.length===0? `<div class="empty">Todavía no hay solicitudes resueltas.</div>` : `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
+        <button class="btn-ghost btn-small" id="mesAnteriorBtn">◀</button>
+        <select id="historialMesSelect" style="width:auto;">
+          ${MESES.map((m,i)=>`<option value="${i}" ${i===mesH?"selected":""}>${m}</option>`).join("")}
+        </select>
+        <select id="historialAnioSelect" style="width:auto;">
+          ${aniosDisponibles.map(a=>`<option value="${a}" ${a===anioH?"selected":""}>${a}</option>`).join("")}
+        </select>
+        <button class="btn-ghost btn-small" id="mesSiguienteBtn">▶</button>
+      </div>
+      ${resueltas.length===0? `<div class="empty">No hay solicitudes resueltas en ${MESES[mesH]} ${anioH}.</div>` : `
       <table>
         <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Estatus</th><th></th></tr></thead>
         <tbody>
@@ -1528,7 +1658,7 @@ function renderTabSolicitudes(container){
           </tr>`).join("")}
         </tbody>
       </table>`}
-      <p class="hint">"Borrar todo el historial" solo elimina las solicitudes ya aprobadas o rechazadas; las pendientes no se tocan.</p>
+      <p class="hint">"Borrar lo de este mes" solo elimina las solicitudes aprobadas o rechazadas que se ven arriba (de ${MESES[mesH]} ${anioH}); las pendientes nunca se tocan.</p>
     </div>`;
 
   container.querySelectorAll("[data-approve]").forEach(btn=>{
@@ -1556,6 +1686,26 @@ function renderTabSolicitudes(container){
   if(borrarTodoBtn){
     borrarTodoBtn.addEventListener("click", ()=>borrarTodoElHistorial(resueltas));
   }
+  document.getElementById("historialMesSelect").addEventListener("change",(e)=>{
+    state.historialMes = Number(e.target.value);
+    renderTabSolicitudes(container);
+  });
+  document.getElementById("historialAnioSelect").addEventListener("change",(e)=>{
+    state.historialAnio = Number(e.target.value);
+    renderTabSolicitudes(container);
+  });
+  document.getElementById("mesAnteriorBtn").addEventListener("click", ()=>{
+    let m = state.historialMes - 1, a = state.historialAnio;
+    if(m<0){ m=11; a--; }
+    state.historialMes = m; state.historialAnio = a;
+    renderTabSolicitudes(container);
+  });
+  document.getElementById("mesSiguienteBtn").addEventListener("click", ()=>{
+    let m = state.historialMes + 1, a = state.historialAnio;
+    if(m>11){ m=0; a++; }
+    state.historialMes = m; state.historialAnio = a;
+    renderTabSolicitudes(container);
+  });
 }
 
 function renderEditReqForm(req){
@@ -1576,6 +1726,18 @@ function renderEditReqForm(req){
           </div>
         </div>
         <div id="editDiasPreview" class="hint" style="font-weight:600;color:var(--accent-dark);"></div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-top:16px;text-transform:none;">
+          <input type="checkbox" id="e_solicitaPrima" style="width:auto;" ${req.solicitaPrima?"checked":""} />
+          <span style="font-weight:600;font-size:13.5px;color:var(--ink);">Incluye prima vacacional</span>
+        </label>
+        <div class="field-row" id="e_primaDiasWrap" style="display:${req.solicitaPrima?"flex":"none"};margin-top:10px;">
+          <div>
+            <label>Días de prima</label>
+            <input type="number" min="0" step="0.01" id="e_diasPrima" value="${req.diasPrimaVacacional||0}" />
+          </div>
+        </div>
+
         <div id="editReqError"></div>
         <div style="display:flex;gap:10px;margin-top:16px;">
           <button class="btn-primary" style="width:auto;margin:0;" type="submit">Guardar cambios</button>
@@ -1585,6 +1747,11 @@ function renderEditReqForm(req){
     </div>`;
   const fiInput = document.getElementById("e_fi");
   const ffInput = document.getElementById("e_ff");
+  const primaCheckbox = document.getElementById("e_solicitaPrima");
+  const primaDiasWrap = document.getElementById("e_primaDiasWrap");
+  primaCheckbox.addEventListener("change", ()=>{
+    primaDiasWrap.style.display = primaCheckbox.checked ? "flex" : "none";
+  });
   function actualizarPreview(){
     const dias = diasHabilesEntre(fiInput.value, ffInput.value, fechaNacimientoDe(req.nomina));
     document.getElementById("editDiasPreview").textContent = dias>0
@@ -1617,7 +1784,9 @@ function renderEditReqForm(req){
         }
       }
     }
-    await updateDoc(doc(db,"requests",req.id), {fechaInicio:fi, fechaFin:ff, diasHabiles:dias});
+    const solicitaPrima = primaCheckbox.checked;
+    const diasPrimaVacacional = solicitaPrima ? Number(document.getElementById("e_diasPrima").value)||0 : 0;
+    await updateDoc(doc(db,"requests",req.id), {fechaInicio:fi, fechaFin:ff, diasHabiles:dias, solicitaPrima, diasPrimaVacacional});
     wrap.innerHTML="";
   });
 }
@@ -1629,7 +1798,7 @@ async function borrarSolicitud(id){
 }
 
 async function borrarTodoElHistorial(resueltas){
-  if(!confirm(`¿Eliminar las ${resueltas.length} solicitudes resueltas (aprobadas/rechazadas)? Esta acción no se puede deshacer.`)) return;
+  if(!confirm(`¿Eliminar las ${resueltas.length} solicitudes resueltas de este mes (aprobadas/rechazadas)? Esta acción no se puede deshacer.`)) return;
   for(const r of resueltas){
     await deleteDoc(doc(db,"requests",r.id));
   }
@@ -1657,6 +1826,10 @@ async function resolverSolicitud(id, estado){
     }
   }
   await updateDoc(doc(db,"requests",id), {estado, comentarioAdmin});
+  if(estado==="aprobado" && req){
+    const emp = state.employees.find(e=>e.nomina===req.nomina);
+    if(emp) enviarBoletaPorCorreoARH({...req, estado:"aprobado"}, emp); // no bloquea el flujo si falla
+  }
 }
 
 /* ================= Boleta de vacaciones en PDF ================= */
