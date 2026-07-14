@@ -78,6 +78,7 @@
   .btn-danger{background:var(--danger);color:#fff;}
   .btn-success{background:var(--success);color:#fff;}
   .btn-small{padding:7px 12px;font-size:13px;}
+  .icon-only-btn{padding:6px 10px;font-size:16px;line-height:1;}
   .error-box{background:var(--danger-soft);color:var(--danger);padding:10px 12px;border-radius:7px;font-size:13.5px;margin-top:16px;}
   .success-box{background:var(--success-soft);color:var(--success);padding:12px 14px;border-radius:7px;font-size:13.5px;margin-bottom:16px;line-height:1.5;}
   .hint{color:var(--ink-soft);font-size:12.5px;margin-top:10px;line-height:1.5;}
@@ -94,6 +95,11 @@
   .badge-role{
     font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 8px;border-radius:20px;
     background:rgba(255,255,255,0.14);color:#fff;
+  }
+  .notif-badge{
+    display:inline-flex;align-items:center;justify-content:center;
+    background:var(--danger);color:#fff;border-radius:20px;font-size:11px;font-weight:700;
+    padding:1px 7px;margin-left:2px;font-family:'IBM Plex Mono',monospace;
   }
   .topbar-right{display:flex;align-items:center;gap:14px;}
   .user-name{font-size:13.5px;color:#CBD8DE;}
@@ -147,6 +153,14 @@
   .field-row > div{flex:1;min-width:160px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;}
   .link-btn{background:none;border:none;color:var(--accent-dark);font-weight:600;font-size:13.5px;padding:0;text-decoration:underline;cursor:pointer;}
+  .filter-dropdown{
+    position:absolute;top:calc(100% + 4px);left:0;z-index:20;
+    background:#fff;border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 8px 24px rgba(10,44,63,0.18);padding:12px;min-width:220px;max-height:260px;overflow-y:auto;
+  }
+  .filter-dropdown-actions{display:flex;justify-content:space-between;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line);}
+  .filter-check-item{display:flex;align-items:center;gap:8px;font-size:13.5px;padding:5px 2px;text-transform:none;font-weight:400;color:var(--ink);}
+  .filter-check-item input{width:auto;}
   .month-bar-wrap{display:flex;flex-direction:column;gap:8px;}
   .month-bar-row{display:flex;align-items:center;gap:10px;}
   .month-bar-label{width:100px;font-size:12.5px;color:var(--ink-soft);}
@@ -190,6 +204,7 @@
 <div id="root"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -377,6 +392,34 @@ function fechaNacimientoDe(nomina){
   return emp && emp.fechaNacimiento ? emp.fechaNacimiento : null;
 }
 
+// ================= Alcance de datos por departamento =================
+// Solo la nómina 11298 ve todo, sin excepción. Los administradores con
+// categoría "RH" también ven todas las solicitudes (de cualquier departamento),
+// porque RH necesita visibilidad completa. Un administrador con categoría
+// "SUP Almacén" o "SUP Armado" solo ve las solicitudes de su propio
+// departamento (Almacén DLSLP / Armado DLSP). Cualquier otro admin que no
+// tenga una de esas categorías ve todo por defecto, para no bloquear por
+// accidente a alguien que no se pensó como supervisor de área.
+const NOMINA_SUPERADMIN = "11298";
+function alcanceAdmin(nomina){
+  const cat = categoriaDe(nomina);
+  // El superadmin ve todo por defecto, pero puede desactivarlo para ver
+  // exactamente lo que vería según su propia categoría (ej. SUP Almacén).
+  if(nomina === NOMINA_SUPERADMIN){
+    if(state.superadminVerTodo) return {todo:true};
+    // cae al mismo cálculo que cualquier otro admin, según su categoría
+  } else if(cat === "RH"){
+    return {todo:true};
+  }
+  if(cat === "SUP Almacén") return {todo:false, departamento:"Almacén DLSLP"};
+  if(cat === "SUP Armado") return {todo:false, departamento:"Armado DLSP"};
+  return {todo:true};
+}
+function solicitudEnAlcance(scope, nominaSolicitante){
+  if(scope.todo) return true;
+  return departamentoDe(nominaSolicitante) === scope.departamento;
+}
+
 /* ================= Estado ================= */
 let state = {
   user: null,        // {nomina, nombre, isAdmin}
@@ -384,6 +427,13 @@ let state = {
   requests: [],
   categorias: null,
   departamentos: null,
+  filtroEmpleados: "",
+  filtroCategoriasSel: null,
+  filtroDepartamentosSel: null,
+  catFilterAbierto: false,
+  deptFilterAbierto: false,
+  notifInicializado: false,
+  superadminVerTodo: localStorage.getItem("vacaciones_superadmin_ver_todo") === "true",
   view: "empleados",
   loginError: "",
   loading: false,
@@ -589,6 +639,12 @@ function watchAuth(){
     state.view = state.user.isAdmin ? "empleados" : "misvacaciones";
     attachListeners();
     render();
+    if(state.user.isAdmin && typeof Notification !== "undefined" && Notification.permission === "default"){
+      // Se pide automáticamente al entrar, sin esperar a que encuentren un botón.
+      // El navegador igual exige que la persona confirme "Permitir" — eso no se
+      // puede saltar por seguridad, pero así ya no depende de que noten un botón.
+      Notification.requestPermission().then(()=>render());
+    }
   });
 }
 
@@ -606,7 +662,9 @@ function attachListeners(){
     ? collection(db,"requests")
     : query(collection(db,"requests"), where("nomina","==",state.user.nomina));
   state.unsubRequests = onSnapshot(requestsQuery, (snap)=>{
+    const anterior = state.requests;
     state.requests = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    if(state.user.isAdmin) notificarSolicitudesNuevas(anterior, state.requests);
     render();
   });
   state.unsubCategorias = onSnapshot(doc(db,"meta","categorias"), (snap)=>{
@@ -624,6 +682,25 @@ function detachListeners(){
   if(state.unsubCategorias) state.unsubCategorias();
   if(state.unsubDepartamentos) state.unsubDepartamentos();
   state.unsubEmployees=null; state.unsubRequests=null; state.unsubCategorias=null; state.unsubDepartamentos=null;
+}
+
+// Notificaciones de escritorio del navegador para admins, cuando llega una
+// solicitud nueva (no avisa de las que ya existían al momento de entrar).
+function notificarSolicitudesNuevas(anteriores, actuales){
+  if(!state.notifInicializado){
+    state.notifInicializado = true;
+    return;
+  }
+  if(typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const idsAnteriores = new Set(anteriores.map(r=>r.id));
+  const scope = alcanceAdmin(state.user.nomina);
+  actuales
+    .filter(r=>!idsAnteriores.has(r.id) && r.estado==="pendiente" && solicitudEnAlcance(scope, r.nomina))
+    .forEach(r=>{
+      new Notification("Nueva solicitud de vacaciones", {
+        body: `${r.nombreEmpleado} solicitó ${r.diasHabiles} día(s), del ${r.fechaInicio} al ${r.fechaFin}.`,
+      });
+    });
 }
 
 /* ================= Cálculo de balance de un empleado ================= */
@@ -931,13 +1008,23 @@ async function handleNuevaSolicitud(e){
 
 /* ================= Vista Admin ================= */
 function renderAdminShell(){
+  const scope = alcanceAdmin(state.user.nomina);
+  const pendientesEnAlcance = state.requests.filter(r=>r.estado==="pendiente" && solicitudEnAlcance(scope, r.nomina)).length;
+  const mostrarBotonNotif = typeof Notification !== "undefined" && Notification.permission === "default";
+  const esSuperadmin = state.user.nomina === NOMINA_SUPERADMIN;
   root.innerHTML = `
     ${topbarHtml()}
     <div class="content">
-      <div class="tabs">
-        <button class="tab ${state.view==='empleados'?'active':''}" data-tab="empleados">Empleados</button>
-        <button class="tab ${state.view==='solicitudes'?'active':''}" data-tab="solicitudes">Solicitudes</button>
-        <button class="tab ${state.view==='reportes'?'active':''}" data-tab="reportes">Reportes</button>
+      <div class="tabs" style="justify-content:space-between;align-items:flex-start;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="tab ${state.view==='empleados'?'active':''}" data-tab="empleados">Empleados</button>
+          <button class="tab ${state.view==='solicitudes'?'active':''}" data-tab="solicitudes">Solicitudes${pendientesEnAlcance>0? ` <span class="notif-badge">${pendientesEnAlcance}</span>`:""}</button>
+          <button class="tab ${state.view==='reportes'?'active':''}" data-tab="reportes">Reportes</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
+          ${mostrarBotonNotif? `<button class="btn-ghost btn-small" id="activarNotifBtn">🔔 Activar notificaciones</button>`:""}
+          ${esSuperadmin? `<button class="btn-ghost btn-small icon-only-btn" id="toggleVerTodoBtn" title="${state.superadminVerTodo? "Viendo todo — clic para ver solo Almacén":"Viendo solo Almacén — clic para ver todo"}">${state.superadminVerTodo? "👁️":"🙈"}</button>`:""}
+        </div>
       </div>
       <div id="tabContent"></div>
     </div>`;
@@ -945,6 +1032,21 @@ function renderAdminShell(){
   document.querySelectorAll(".tab").forEach(t=>{
     t.addEventListener("click", ()=>{ state.view=t.dataset.tab; render(); });
   });
+  const activarNotifBtn = document.getElementById("activarNotifBtn");
+  if(activarNotifBtn){
+    activarNotifBtn.addEventListener("click", async ()=>{
+      await Notification.requestPermission();
+      render();
+    });
+  }
+  const toggleVerTodoBtn = document.getElementById("toggleVerTodoBtn");
+  if(toggleVerTodoBtn){
+    toggleVerTodoBtn.addEventListener("click", ()=>{
+      state.superadminVerTodo = !state.superadminVerTodo;
+      localStorage.setItem("vacaciones_superadmin_ver_todo", state.superadminVerTodo ? "true" : "false");
+      render();
+    });
+  }
   const c = document.getElementById("tabContent");
   if(state.view==="empleados") renderTabEmpleados(c);
   if(state.view==="solicitudes") renderTabSolicitudes(c);
@@ -952,21 +1054,68 @@ function renderAdminShell(){
 }
 
 function renderTabEmpleados(container){
-  const empleados = [...state.employees].sort((a,b)=>a.nomina.localeCompare(b.nomina));
+  const filtro = (state.filtroEmpleados||"").trim().toLowerCase();
+  const empleadosTodos = [...state.employees].sort((a,b)=>a.nomina.localeCompare(b.nomina));
+  const catSel = state.filtroCategoriasSel; // null = sin filtro (mostrar todas)
+  const deptSel = state.filtroDepartamentosSel; // null = sin filtro (mostrar todos)
+  const empleados = empleadosTodos.filter(emp=>{
+    const matchTexto = !filtro || (emp.nomina||"").toLowerCase().includes(filtro) || (emp.nombre||"").toLowerCase().includes(filtro);
+    const matchCat = !catSel || catSel.includes(emp.categoria || "(Sin categoría)");
+    const matchDept = !deptSel || deptSel.includes(emp.departamento || "(Sin departamento)");
+    return matchTexto && matchCat && matchDept;
+  });
+  const hayFiltrosActivos = !!filtro || !!catSel || !!deptSel;
+
+  const valoresCategoria = [...categoriasDisponibles(), "(Sin categoría)"];
+  const valoresDepartamento = [...departamentosDisponibles(), "(Sin departamento)"];
+
+  function panelChecklist(id, valores, seleccionActual, tipo){
+    // seleccionActual null = todo marcado (sin filtro activo)
+    return `
+      <div id="${id}" class="filter-dropdown" style="display:${state[tipo+"FilterAbierto"]?"block":"none"};">
+        <div class="filter-dropdown-actions">
+          <button class="link-btn" data-filtertodo="${tipo}">Marcar todo</button>
+          <button class="link-btn" data-filternada="${tipo}">Quitar todo</button>
+        </div>
+        ${valores.map(v=>{
+          const marcado = seleccionActual===null || seleccionActual.includes(v);
+          return `<label class="filter-check-item">
+            <input type="checkbox" data-filterval="${tipo}" value="${v}" ${marcado?"checked":""} />
+            ${v}
+          </label>`;
+        }).join("")}
+        <div style="margin-top:10px;">
+          <button class="btn-primary btn-small" style="width:auto;margin:0;" data-filtercerrar="${tipo}">Aplicar</button>
+        </div>
+      </div>`;
+  }
+
   container.innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <h3 style="margin:0;">Empleados (${empleados.length})</h3>
+        <h3 style="margin:0;">Empleados (${empleados.length}${hayFiltrosActivos? ` de ${empleadosTodos.length}`:""})</h3>
         <div style="display:flex;gap:8px;">
           <button class="btn-ghost btn-small" id="manageCatBtn">Gestionar categorías</button>
           <button class="btn-ghost btn-small" id="manageDeptBtn">Gestionar departamentos</button>
           <button class="btn-primary" style="width:auto;margin:0;" id="newEmpBtn">+ Nuevo empleado</button>
         </div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+        <input id="filtroEmpleadosInput" placeholder="Buscar por nombre o nómina…" value="${state.filtroEmpleados||""}" style="flex:1;min-width:180px;" />
+        <div style="position:relative;">
+          <button class="btn-ghost btn-small" id="catFilterToggle">Categoría${catSel? ` (${catSel.length})`:""} ▾</button>
+          ${panelChecklist("catFilterPanel", valoresCategoria, catSel, "cat")}
+        </div>
+        <div style="position:relative;">
+          <button class="btn-ghost btn-small" id="deptFilterToggle">Departamento${deptSel? ` (${deptSel.length})`:""} ▾</button>
+          ${panelChecklist("deptFilterPanel", valoresDepartamento, deptSel, "dept")}
+        </div>
+        ${hayFiltrosActivos? `<button class="link-btn" id="limpiarFiltrosBtn">Limpiar filtros</button>`:""}
+      </div>
       <div id="catFormWrap"></div>
       <div id="deptFormWrap"></div>
       <div id="empFormWrap"></div>
-      ${empleados.length===0? `<div class="empty">Aún no hay empleados registrados.</div>` : `
+      ${empleados.length===0? `<div class="empty">${hayFiltrosActivos? "No hay empleados que coincidan con el filtro." : "Aún no hay empleados registrados."}</div>` : `
       <table>
         <thead><tr><th>Nómina</th><th>Nombre</th><th>Ingreso</th><th>Antigüedad</th><th>Días/año</th><th>Restantes</th><th>Categoría</th><th>Departamento</th><th>Rol</th><th></th></tr></thead>
         <tbody>
@@ -996,6 +1145,71 @@ function renderTabEmpleados(container){
   document.getElementById("newEmpBtn").addEventListener("click", ()=>renderEmpForm(null));
   document.getElementById("manageCatBtn").addEventListener("click", ()=>renderCatForm());
   document.getElementById("manageDeptBtn").addEventListener("click", ()=>renderDeptForm());
+
+  const filtroInput = document.getElementById("filtroEmpleadosInput");
+  filtroInput.addEventListener("input", ()=>{
+    state.filtroEmpleados = filtroInput.value;
+    renderTabEmpleados(container);
+    const nuevoInput = document.getElementById("filtroEmpleadosInput");
+    nuevoInput.focus();
+    nuevoInput.setSelectionRange(nuevoInput.value.length, nuevoInput.value.length);
+  });
+
+  document.getElementById("catFilterToggle").addEventListener("click", ()=>{
+    state.catFilterAbierto = !state.catFilterAbierto;
+    state.deptFilterAbierto = false;
+    renderTabEmpleados(container);
+  });
+  document.getElementById("deptFilterToggle").addEventListener("click", ()=>{
+    state.deptFilterAbierto = !state.deptFilterAbierto;
+    state.catFilterAbierto = false;
+    renderTabEmpleados(container);
+  });
+  const limpiarBtn = document.getElementById("limpiarFiltrosBtn");
+  if(limpiarBtn){
+    limpiarBtn.addEventListener("click", ()=>{
+      state.filtroEmpleados = "";
+      state.filtroCategoriasSel = null;
+      state.filtroDepartamentosSel = null;
+      renderTabEmpleados(container);
+    });
+  }
+  container.querySelectorAll("[data-filtertodo]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      if(btn.dataset.filtertodo==="cat") state.filtroCategoriasSel = null; else state.filtroDepartamentosSel = null;
+      renderTabEmpleados(container);
+    });
+  });
+  container.querySelectorAll("[data-filternada]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      if(btn.dataset.filternada==="cat") state.filtroCategoriasSel = []; else state.filtroDepartamentosSel = [];
+      renderTabEmpleados(container);
+    });
+  });
+  container.querySelectorAll("[data-filtercerrar]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.catFilterAbierto = false;
+      state.deptFilterAbierto = false;
+      renderTabEmpleados(container);
+    });
+  });
+  container.querySelectorAll("[data-filterval]").forEach(chk=>{
+    chk.addEventListener("change", ()=>{
+      const tipo = chk.dataset.filterval;
+      const valores = tipo==="cat" ? valoresCategoria : valoresDepartamento;
+      const key = tipo==="cat" ? "filtroCategoriasSel" : "filtroDepartamentosSel";
+      let actual = state[key];
+      if(actual===null) actual = [...valores]; // materializar "todo marcado" antes de quitar uno
+      if(chk.checked){
+        if(!actual.includes(chk.value)) actual.push(chk.value);
+      } else {
+        actual = actual.filter(v=>v!==chk.value);
+      }
+      state[key] = actual.length===valores.length ? null : actual;
+      renderTabEmpleados(container);
+    });
+  });
+
   container.querySelectorAll("[data-edit]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const emp = state.employees.find(e=>e.nomina===btn.dataset.edit);
@@ -1252,12 +1466,14 @@ function renderEmpForm(emp){
 }
 
 function renderTabSolicitudes(container){
-  const pendientes = state.requests.filter(r=>r.estado==="pendiente")
+  const scope = alcanceAdmin(state.user.nomina);
+  const pendientes = state.requests.filter(r=>r.estado==="pendiente" && solicitudEnAlcance(scope, r.nomina))
     .sort((a,b)=>(a.fechaInicio||"").localeCompare(b.fechaInicio||""));
-  const resueltas = state.requests.filter(r=>r.estado!=="pendiente")
+  const resueltas = state.requests.filter(r=>r.estado!=="pendiente" && solicitudEnAlcance(scope, r.nomina))
     .sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
 
   container.innerHTML = `
+    ${!scope.todo? `<div class="hint" style="margin-bottom:14px;">Estás viendo solo las solicitudes del departamento <strong>${scope.departamento}</strong>.</div>`:""}
     <div id="editReqFormWrap"></div>
     <div class="card">
       <h3>Pendientes de aprobación (${pendientes.length})</h3>
@@ -1615,7 +1831,8 @@ function construirCalendarioMes(year, month){
   const pad = n=>String(n).padStart(2,"0");
   const primerDia = new Date(year,month,1).getDay();
   const diasEnMes = new Date(year,month+1,0).getDate();
-  const aprobadas = state.requests.filter(r=>r.estado==="aprobado");
+  const scope = alcanceAdmin(state.user.nomina);
+  const aprobadas = state.requests.filter(r=>r.estado==="aprobado" && solicitudEnAlcance(scope, r.nomina));
   const finMes = `${year}-${pad(month+1)}-${pad(diasEnMes)}`;
   const inicioMes = `${year}-${pad(month+1)}-01`;
 
@@ -1708,14 +1925,42 @@ function construirCalendarioMes(year, month){
     </div>`;
 }
 
+function exportarResumenExcel(){
+  const scope = alcanceAdmin(state.user.nomina);
+  const empleadosFiltrados = state.employees.filter(emp=>scope.todo || emp.departamento===scope.departamento);
+  const filas = empleadosFiltrados.map(emp=>{
+    const b = balanceDe(emp.nomina);
+    return {
+      "Nómina": emp.nomina,
+      "Nombre": emp.nombre,
+      "Categoría": emp.categoria||"",
+      "Departamento": emp.departamento||"",
+      "Fecha de ingreso": emp.fechaIngreso||"",
+      "Antigüedad (años)": b.esAdmin? "" : b.antig,
+      "Días totales": b.esAdmin? "" : b.totales,
+      "Días tomados": b.esAdmin? "" : b.tomados,
+      "Restantes": b.esAdmin? "" : b.restantes,
+      "Rol": emp.isAdmin? "Admin" : "Empleado",
+    };
+  });
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, "Resumen empleados");
+  const hoy = todayStr();
+  XLSX.writeFile(libro, `Respaldo_vacaciones_${hoy}.xlsx`);
+}
+
 function renderTabReportes(container){
   const anioActual = new Date().getFullYear();
   if(!state.reportYear) state.reportYear = anioActual;
   if(state.reportMonth===undefined || state.reportMonth===null) state.reportMonth = new Date().getMonth();
   const anio = state.reportYear;
   const mes = state.reportMonth;
+  const scope = alcanceAdmin(state.user.nomina);
 
-  const aprobadas = state.requests.filter(r=>r.estado==="aprobado" && r.fechaInicio && r.fechaInicio.startsWith(String(anio)));
+  const aprobadas = state.requests.filter(r=>
+    r.estado==="aprobado" && r.fechaInicio && r.fechaInicio.startsWith(String(anio)) && solicitudEnAlcance(scope, r.nomina)
+  );
 
   // por mes
   const porMes = new Array(12).fill(0);
@@ -1739,12 +1984,13 @@ function renderTabReportes(container){
   }
   const semanasOrdenadas = Object.keys(porSemana).map(Number).filter(w=>semanasDelMes.has(w)).sort((a,b)=>a-b);
 
-  const aniosConDatos = [...new Set(state.requests.map(r=>r.fechaInicio? r.fechaInicio.slice(0,4):null).filter(Boolean))].map(Number);
+  const aniosConDatos = [...new Set(state.requests.filter(r=>solicitudEnAlcance(scope, r.nomina)).map(r=>r.fechaInicio? r.fechaInicio.slice(0,4):null).filter(Boolean))].map(Number);
   const rangoAnios = [];
   for(let y=anioActual-2; y<=anioActual+4; y++) rangoAnios.push(y);
   const anios = [...new Set([...rangoAnios, ...aniosConDatos, anioActual])].sort((a,b)=>a-b).map(String);
 
   container.innerHTML = `
+    ${!scope.todo? `<div class="hint" style="margin-bottom:14px;">Estás viendo solo los datos del departamento <strong>${scope.departamento}</strong>.</div>`:""}
     <div class="card">
       <div class="toolbar">
         <h3 style="margin:0;">Calendario de vacaciones</h3>
@@ -1789,11 +2035,14 @@ function renderTabReportes(container){
     </div>
 
     <div class="card">
-      <h3>Resumen por empleado</h3>
+      <div class="toolbar">
+        <h3 style="margin:0;">Resumen por empleado</h3>
+        <button class="btn-ghost btn-small" id="exportExcelBtn">Descargar respaldo (Excel)</button>
+      </div>
       <table>
         <thead><tr><th>Nómina</th><th>Nombre</th><th>Categoría</th><th>Antigüedad</th><th>Días totales</th><th>Días tomados</th><th>Restantes</th></tr></thead>
         <tbody>
-        ${state.employees.map(emp=>{
+        ${state.employees.filter(emp=>scope.todo || emp.departamento===scope.departamento).map(emp=>{
           const b = balanceDe(emp.nomina);
           if(b.esAdmin){
             return `<tr><td class="num">${emp.nomina}</td><td>${emp.nombre}</td><td>${emp.categoria||"—"}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>`;
@@ -1811,6 +2060,8 @@ function renderTabReportes(container){
         </tbody>
       </table>
     </div>`;
+
+  document.getElementById("exportExcelBtn").addEventListener("click", exportarResumenExcel);
 
   document.getElementById("yearSelect").addEventListener("change",(e)=>{
     state.reportYear = Number(e.target.value);
