@@ -329,6 +329,12 @@ function isoWeek(dateStr){
   const week1 = new Date(d.getFullYear(),0,4);
   return 1 + Math.round(((d-week1)/86400000 - 3 + ((week1.getDay()+6)%7))/7);
 }
+function lunesDeSemana(dateStr){
+  const d = new Date(dateStr+"T00:00:00");
+  const diaSemana = (d.getDay()+6)%7; // 0=lunes ... 6=domingo
+  d.setDate(d.getDate()-diaSemana);
+  return toISODate(d);
+}
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const DIAS_SEMANA = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 const ORDINALES = ["","primer","segundo","tercer","cuarto","quinto","sexto","séptimo","octavo","noveno","décimo"];
@@ -1004,7 +1010,7 @@ function renderEmpleadoShell(){
       ${puedeVerCalendario ? `
       <div class="card">
         <div class="toolbar">
-          <h3 style="margin:0;">Calendario de vacaciones</h3>
+          <h3 style="margin:0;">Vacaciones por semana fiscal</h3>
           <div style="display:flex;gap:8px;">
             <select id="vigMesSelect" style="width:auto;">
               ${MESES.map((m,i)=>`<option value="${i}" ${i===state.reportMonth?"selected":""}>${m}</option>`).join("")}
@@ -1014,8 +1020,8 @@ function renderEmpleadoShell(){
             </select>
           </div>
         </div>
-        ${construirCalendarioMes(state.reportYear, state.reportMonth)}
-        <p class="hint">Solo se muestran las solicitudes ya aprobadas.</p>
+        <p class="hint">Solo se muestran las solicitudes ya aprobadas, agrupadas de lunes a domingo.</p>
+        ${construirVistaPorSemana(state.reportYear, state.reportMonth)}
       </div>` : ""}
     </div>`;
   bindTopbar();
@@ -2035,6 +2041,46 @@ function descargarBoletaPDF(reqId){
   if(!req || !emp){ alert("No se encontró la información necesaria para la boleta."); return; }
   const doc = construirBoletaPDF(req, emp);
   doc.save(`Boleta_${req.nomina}_${req.fechaInicio}.pdf`);
+}
+
+// Vista por semana fiscal: para cada semana (lunes a domingo) que toca el
+// mes seleccionado, lista quién tiene vacaciones aprobadas ese rango de días.
+function construirVistaPorSemana(year, month){
+  const pad = n=>String(n).padStart(2,"0");
+  const diasEnMes = new Date(year,month+1,0).getDate();
+  const scope = alcanceAdmin(state.user.nomina);
+  const aprobadas = state.requests.filter(r=>r.estado==="aprobado" && solicitudEnAlcance(scope, r.nomina));
+
+  // Semanas (identificadas por su lunes) que tocan algún día de este mes
+  const lunesVistos = [];
+  for(let d=1; d<=diasEnMes; d++){
+    const dateStr = `${year}-${pad(month+1)}-${pad(d)}`;
+    const lunes = lunesDeSemana(dateStr);
+    if(!lunesVistos.includes(lunes)) lunesVistos.push(lunes);
+  }
+  lunesVistos.sort();
+
+  const bloques = lunesVistos.map(lunes=>{
+    const domingo = addDaysStr(lunes,6);
+    const numSemana = isoWeek(lunes);
+    const enEstaSemana = aprobadas
+      .filter(r=>r.fechaInicio<=domingo && r.fechaFin>=lunes)
+      .sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
+    return `
+      <div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;">
+        <h3 style="font-size:15px;margin:0 0 10px;">Semana ${numSemana} · ${lunes} al ${domingo}</h3>
+        ${enEstaSemana.length===0? `<div class="empty">Nadie de vacaciones esta semana.</div>` : `
+        <div class="cal-legend">
+          ${enEstaSemana.map(r=>`
+            <div class="cal-legend-item">
+              <span><span class="cal-dot" style="background:${colorCategoria(categoriaDe(r.nomina))};margin-right:6px;"></span>${r.nombreEmpleado}${categoriaDe(r.nomina)?` · ${categoriaDe(r.nomina)}`:""}${departamentoDe(r.nomina)?` (${departamentoDe(r.nomina)})`:""}</span>
+              <span class="num">${r.fechaInicio} → ${r.fechaFin}</span>
+            </div>`).join("")}
+        </div>`}
+      </div>`;
+  }).join("");
+
+  return bloques;
 }
 
 function construirCalendarioMes(year, month){
