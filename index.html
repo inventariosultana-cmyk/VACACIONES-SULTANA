@@ -214,7 +214,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
-  collection, onSnapshot, addDoc, query, where, serverTimestamp
+  collection, onSnapshot, addDoc, query, where, or, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* =========================================================
@@ -245,9 +245,9 @@ if (!CONFIG_PENDING) {
    Crea una cuenta gratis en https://www.emailjs.com y reemplaza
    estos 4 valores. Ver instrucciones completas al final del README.
    ========================================================= */
-const EMAILJS_PUBLIC_KEY = "A3whjdPFJe7s-R7QM";
-const EMAILJS_SERVICE_ID = "service_eequ5pc";
-const EMAILJS_TEMPLATE_SOLICITUD = "template_l2dv4xb";
+const EMAILJS_PUBLIC_KEY = "TU_EMAILJS_PUBLIC_KEY";
+const EMAILJS_SERVICE_ID = "TU_EMAILJS_SERVICE_ID";
+const EMAILJS_TEMPLATE_SOLICITUD = "TU_TEMPLATE_ID_SOLICITUD";
 const EMAILJS_TEMPLATE_BOLETA = "TU_TEMPLATE_ID_BOLETA";
 const EMAILJS_CONFIG_PENDING = EMAILJS_PUBLIC_KEY.includes("TU_EMAILJS");
 if(!EMAILJS_CONFIG_PENDING && typeof emailjs !== "undefined"){
@@ -345,7 +345,7 @@ function addDaysStr(dateStr, n){
   return d.toISOString().slice(0,10);
 }
 const DIAS_ANTICIPACION = 7;
-const CATEGORIAS_DEFAULT = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza","RH","SUP Almacén","SUP Armado"];
+const CATEGORIAS_DEFAULT = ["AG Almacén","AG Armado","OPM Almacén","OPM Armado","Chófer","OPM Inventarios","Limpieza","RH","SUP Almacén","SUP Armado","Vigilancia"];
 function categoriasDisponibles(){
   return (state.categorias && state.categorias.length>0) ? state.categorias : CATEGORIAS_DEFAULT;
 }
@@ -751,13 +751,14 @@ function attachListeners(){
     state.employees = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   });
-  // Un admin puede escuchar TODAS las solicitudes. Un empleado solo puede
-  // escuchar las suyas: las reglas de seguridad exigen que la consulta
-  // venga filtrada por su propia nómina, o Firestore la rechaza entera
-  // (así estaba el bug: al empleado nunca le llegaba ni su propia solicitud).
+  // Un admin escucha TODAS las solicitudes. Un empleado normal escucha las
+  // suyas (cualquier estatus) MÁS todas las que ya estén aprobadas de
+  // cualquier persona — esto es lo que permite que categorías como
+  // "Vigilancia" vean el calendario de quién está de vacaciones. Nunca ve
+  // los pendientes/rechazados de alguien más, solo los suyos y los aprobados.
   const requestsQuery = state.user.isAdmin
     ? collection(db,"requests")
-    : query(collection(db,"requests"), where("nomina","==",state.user.nomina));
+    : query(collection(db,"requests"), or(where("nomina","==",state.user.nomina), where("estado","==","aprobado")));
   state.unsubRequests = onSnapshot(requestsQuery, (snap)=>{
     const anterior = state.requests;
     state.requests = snap.docs.map(d=>({id:d.id, ...d.data()}));
@@ -899,6 +900,13 @@ function renderEmpleadoShell(){
   const adelantoDisponible = ventana.enVentana
     ? DIAS_MAX_ADELANTO - adelantoTomadoPara(state.user.nomina, ventana.proximoInicio)
     : 0;
+  const puedeVerCalendario = empActual && empActual.categoria === "Vigilancia";
+  const hoy = new Date();
+  if(state.reportMonth===undefined || state.reportMonth===null) state.reportMonth = hoy.getMonth();
+  if(!state.reportYear) state.reportYear = hoy.getFullYear();
+  const anioActualVig = hoy.getFullYear();
+  const aniosVigilancia = [];
+  for(let y=anioActualVig-1; y<=anioActualVig+1; y++) aniosVigilancia.push(y);
 
   root.innerHTML = `
     ${topbarHtml()}
@@ -992,6 +1000,23 @@ function renderEmpleadoShell(){
           </tbody>
         </table>`}
       </div>
+
+      ${puedeVerCalendario ? `
+      <div class="card">
+        <div class="toolbar">
+          <h3 style="margin:0;">Calendario de vacaciones</h3>
+          <div style="display:flex;gap:8px;">
+            <select id="vigMesSelect" style="width:auto;">
+              ${MESES.map((m,i)=>`<option value="${i}" ${i===state.reportMonth?"selected":""}>${m}</option>`).join("")}
+            </select>
+            <select id="vigAnioSelect" style="width:auto;">
+              ${aniosVigilancia.map(a=>`<option value="${a}" ${a===state.reportYear?"selected":""}>${a}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        ${construirCalendarioMes(state.reportYear, state.reportMonth)}
+        <p class="hint">Solo se muestran las solicitudes ya aprobadas.</p>
+      </div>` : ""}
     </div>`;
   bindTopbar();
   document.getElementById("reqForm").addEventListener("submit", handleNuevaSolicitud);
@@ -1033,6 +1058,18 @@ function renderEmpleadoShell(){
   ffInput.addEventListener("change", actualizarPreview);
   if(primaCheckbox) primaCheckbox.addEventListener("change", actualizarPreview);
   actualizarPreview();
+  const vigMesSelect = document.getElementById("vigMesSelect");
+  const vigAnioSelect = document.getElementById("vigAnioSelect");
+  if(vigMesSelect){
+    vigMesSelect.addEventListener("change",(e)=>{
+      state.reportMonth = Number(e.target.value);
+      renderEmpleadoShell();
+    });
+    vigAnioSelect.addEventListener("change",(e)=>{
+      state.reportYear = Number(e.target.value);
+      renderEmpleadoShell();
+    });
+  }
 }
 
 async function handleNuevaSolicitud(e){
