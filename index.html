@@ -270,6 +270,14 @@ function antiguedadAnios(fechaIngresoStr){
   return Math.max(0, years);
 }
 function pad2(n){ return String(n).padStart(2,"0"); }
+function formatoFechaHoraSolicitud(ts){
+  if(!ts) return "—";
+  const d = typeof ts.toDate === "function" ? ts.toDate() : new Date(ts);
+  let horas = d.getHours();
+  const ampm = horas>=12 ? "p.m." : "a.m.";
+  horas = horas % 12; if(horas===0) horas = 12;
+  return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()} ${horas}:${pad2(d.getMinutes())} ${ampm}`;
+}
 function toISODate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 function primerLunes(year, monthIndex){
   const d = new Date(year, monthIndex, 1);
@@ -991,10 +999,11 @@ function renderEmpleadoShell(){
         <h3>Tus solicitudes</h3>
         ${misSolicitudes.length===0 ? `<div class="empty">Aún no has hecho ninguna solicitud.</div>` : `
         <table>
-          <thead><tr><th>Del</th><th>Al</th><th>Días hábiles</th><th>Prima</th><th>Estatus</th><th>Comentario admin</th></tr></thead>
+          <thead><tr><th>Enviada</th><th>Del</th><th>Al</th><th>Días hábiles</th><th>Prima</th><th>Estatus</th><th>Comentario admin</th></tr></thead>
           <tbody>
             ${misSolicitudes.map(r=>`
               <tr>
+                <td class="num">${formatoFechaHoraSolicitud(r.fechaSolicitud)}</td>
                 <td class="num">${r.fechaInicio}</td>
                 <td class="num">${r.fechaFin}</td>
                 <td class="num">${r.diasHabiles}${r.esAdelanto? ` (${r.diasAdelanto} adelanto)`:""}</td>
@@ -1642,10 +1651,11 @@ function renderTabSolicitudes(container){
       <h3>Pendientes de aprobación (${pendientes.length})</h3>
       ${pendientes.length===0? `<div class="empty">No hay solicitudes pendientes.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Comentario</th><th></th></tr></thead>
+        <thead><tr><th>Enviada</th><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Comentario</th><th></th></tr></thead>
         <tbody>
         ${pendientes.map(r=>`
           <tr>
+            <td class="num">${formatoFechaHoraSolicitud(r.fechaSolicitud)}</td>
             <td>${r.nombreEmpleado}</td>
             <td class="num">${r.nomina}</td>
             <td>${categoriaDe(r.nomina)||"—"}</td>
@@ -1681,10 +1691,11 @@ function renderTabSolicitudes(container){
       </div>
       ${resueltas.length===0? `<div class="empty">No hay solicitudes resueltas en ${MESES[mesH]} ${anioH}.</div>` : `
       <table>
-        <thead><tr><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Estatus</th><th></th></tr></thead>
+        <thead><tr><th>Enviada</th><th>Empleado</th><th>Nómina</th><th>Categoría</th><th>Del</th><th>Al</th><th>Días</th><th>Prima</th><th>Estatus</th><th></th></tr></thead>
         <tbody>
         ${resueltas.map(r=>`
           <tr>
+            <td class="num">${formatoFechaHoraSolicitud(r.fechaSolicitud)}</td>
             <td>${r.nombreEmpleado}</td>
             <td class="num">${r.nomina}</td>
             <td>${categoriaDe(r.nomina)||"—"}</td>
